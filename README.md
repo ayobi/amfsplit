@@ -17,8 +17,8 @@ release 0.3.1 assignment for assignment.
 | Step | State |
 |---|---|
 | `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done. Byte-identical on the 12 parity cases, the 904 deposited culture sequences, the 280 LongGloDB ASVs and the 5,546 EUKARYOME reads (`parity/stage1`) |
-| `triage`: AMF or not, from the LSU window | Next |
-| `name`: VT, SH and LSU names, consensus, decision steps | To do |
+| `validate` + `triage`: AMF or not, from the best hit of the LR0R–FLR2 window (validate_windows.py and triage.py v0.3.1) | Done. Byte-identical on 7 parity cases, vsearch included (`parity/triage`); the default outgroups do not fit V18 (see there) |
+| `name`: VT, SH and LSU names, consensus, decision steps | Next |
 | `db`: references built from the user's downloads, checked by checksum | To do |
 
 ## Build and run
@@ -48,7 +48,7 @@ and outputs are those of amfsplit.py v0.3.1:
 | `crates/amfsplit-regions` | Stage 1: anchors, primer windows, concatemer screen |
 | `crates/amfsplit-edlib` | FFI to edlib, vendored from Python edlib 1.3.9.post1 so alignments equal the prototype's |
 | `panels/` | The legacy primer-window panel used in the paper |
-| `parity/stage1/` | Golden outputs of the prototype, and the parity checks |
+| `parity/stage1/`, `parity/triage/` | Golden outputs of the prototypes, and the parity checks |
 
 ## Licence
 

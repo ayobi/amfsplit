@@ -1,0 +1,31 @@
+{
+ "windows": 1012,
+ "with_hit": 1002,
+ "with_hit_pct": 99.0,
+ "best_identity_median": 98.8,
+ "query_coverage_median": 97.4,
+ "target_coverage_median": 91.4,
+ "identity_ge_97_pct": 79.5,
+ "top_targets": [
+  [
+   "FJ461828.1_Septoglomeraceae_Funneliformis_coronatus",
+   111
+  ],
+  [
+   "PP639275.1_Glomeraceae_Glomus_rugosae",
+   78
+  ],
+  [
+   "MT832195.1_Sclerocystaceae_Rhizophagus_irregularis",
+   64
+  ],
+  [
+   "KT444708.1_Diversisporaceae_Diversispora_varaderana",
+   45
+  ],
+  [
+   "FN547621.1_Gigasporaceae_Cetraspora_gilmorei",
+   37
+  ]
+ ]
+}

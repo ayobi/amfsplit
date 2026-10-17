@@ -11,3 +11,4 @@ authors.workspace = true
 anyhow = "1"
 amfsplit-edlib = { path = "../amfsplit-edlib" }
 flate2 = "1"
+regex = "1"

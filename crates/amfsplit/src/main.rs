@@ -1,7 +1,7 @@
 //! amfsplit: long-read SSU–ITS–LSU metabarcoding of arbuscular mycorrhizal fungi.
 //!
-//! v0.1 under construction. `regions` is the Rust port of Stage 1 (amfsplit.py v0.3.1); naming
-//! and the decision steps follow.
+//! v0.1 under construction. `regions`, `validate` and `triage` are the Rust port of Stage 1
+//! (amfsplit.py, validate_windows.py and triage.py v0.3.1); naming and the decision steps follow.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 
 use amfsplit_regions::pycompat::Json;
 use amfsplit_regions::stage1::{Params, check_out_prefix, run};
+use amfsplit_regions::triage::{
+    DELAVAUX_OUTGROUPS, TriageParams, ValidateParams, triage, validate,
+};
 
 #[derive(Parser)]
 #[command(
@@ -29,6 +32,64 @@ enum Command {
     /// Cut ITS regions (from ITSxRust anchors) and legacy primer windows from long reads
     /// (Stage 1; same options and outputs as amfsplit.py v0.3.1).
     Regions(RegionsArgs),
+    /// Best vsearch hit of each window against a reference (validate_windows.py v0.3.1); writes
+    /// {out}.hits.tsv, the input of `triage`, and {out}.summary.json.
+    Validate(ValidateArgs),
+    /// Call each read AMF, unresolved, non_AMF, no_hit or no_window from its best hit, and write
+    /// AMF-only copies of the Stage 1 FASTAs (triage.py v0.3.1).
+    Triage(TriageArgs),
+}
+
+#[derive(Args)]
+struct ValidateArgs {
+    /// Window FASTA from `amfsplit regions`
+    #[arg(short = 'w', long)]
+    windows: PathBuf,
+    /// Reference FASTA (for triage: an LSU reference that also holds non-AMF lineages)
+    #[arg(short = 'r', long = "ref")]
+    reference: PathBuf,
+    /// Output prefix
+    #[arg(short = 'o', long)]
+    out: String,
+    /// Minimum identity to report
+    #[arg(long, default_value_t = 0.70)]
+    id: f64,
+    #[arg(long, default_value_t = 4)]
+    threads: i64,
+    /// vsearch executable (the hits were validated with vsearch 2.27.0)
+    #[arg(long, default_value = "vsearch", env = "AMFSPLIT_VSEARCH")]
+    vsearch: PathBuf,
+}
+
+#[derive(Args)]
+struct TriageArgs {
+    /// Hits TSV from `amfsplit validate`
+    #[arg(long)]
+    hits: PathBuf,
+    /// Output prefix
+    #[arg(long)]
+    out: String,
+    /// Stage 1 records TSV (adds no_window calls)
+    #[arg(long)]
+    records: Option<PathBuf>,
+    /// Stage 1 output prefix; writes <file>.amf.fasta beside every <prefix>.*.fasta
+    #[arg(long)]
+    fasta_prefix: Option<String>,
+    /// Comma-separated non-AMF genera, read from the second underscore-separated field of the
+    /// target name. The default lists the outgroups of an older Delavaux release; for V18 use
+    /// --amf-pattern instead.
+    #[arg(long, default_value = DELAVAUX_OUTGROUPS)]
+    outgroups: String,
+    /// Regex marking AMF targets; overrides --outgroups (V18: '_[A-Z][a-z]+aceae_'; a reference
+    /// with lineages in its headers: 'Glomeromycota')
+    #[arg(long)]
+    amf_pattern: Option<String>,
+    /// Identity (%) for a confident AMF call (~85 for ONT R9.4.1)
+    #[arg(long, default_value_t = 90.0)]
+    min_id: f64,
+    /// Include unresolved reads in the AMF subsets
+    #[arg(long)]
+    keep_unresolved: bool,
 }
 
 #[derive(Args)]
@@ -184,10 +245,43 @@ fn regions(a: RegionsArgs, argv: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn validate_cmd(a: ValidateArgs) -> Result<()> {
+    check_out_prefix(&a.out)?;
+    let p = ValidateParams {
+        windows: a.windows,
+        reference: a.reference,
+        out: a.out,
+        id: a.id,
+        threads: a.threads,
+        vsearch: a.vsearch,
+    };
+    print!("{}", validate(&p)?);
+    Ok(())
+}
+
+fn triage_cmd(a: TriageArgs) -> Result<()> {
+    check_out_prefix(&a.out)?;
+    let mut p = TriageParams::new(a.hits, a.out);
+    p.records = a.records;
+    p.fasta_prefix = a.fasta_prefix;
+    p.outgroups = a.outgroups;
+    p.amf_pattern = a.amf_pattern;
+    p.min_id = a.min_id;
+    p.keep_unresolved = a.keep_unresolved;
+    let report = triage(&p)?;
+    print!("{}", report.stdout);
+    if let Some(hint) = report.hint {
+        eprintln!("{hint}");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     let cli = Cli::parse();
     match cli.command {
         Command::Regions(a) => regions(a, &argv),
+        Command::Validate(a) => validate_cmd(a),
+        Command::Triage(a) => triage_cmd(a),
     }
 }

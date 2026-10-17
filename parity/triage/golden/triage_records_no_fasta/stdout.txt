@@ -1,0 +1,27 @@
+{
+ "reads": 1017,
+ "calls": {
+  "AMF": {
+   "n": 938,
+   "pct": 92.2
+  },
+  "unresolved": {
+   "n": 63,
+   "pct": 6.2
+  },
+  "no_window": {
+   "n": 15,
+   "pct": 1.5
+  },
+  "non_AMF": {
+   "n": 1,
+   "pct": 0.1
+  }
+ },
+ "non_AMF_best_hits": [
+  [
+   "Mortierella",
+   1
+  ]
+ ]
+}

@@ -1,0 +1,6 @@
+validate_windows.py ced7f223eb0a33263e4ebcb0e6ba050a9c73a1628dafb22c99cc6b8eba171448
+triage.py 8a233d8eeba8d1dbe445f0294fa41c15358266d28ff89a1761ea1c769faa6b83
+vsearch vsearch v2.27.0_linux_x86_64, 7.8GB RAM, 2 cores
+V18_LSUDB_052025.fasta 28a806a6b1930e74e413b83d5c6cc5c5d71268a740ed38488d0bb25de9a494a7
+validate options --id 0.70 --threads 1
+python 3.13.16

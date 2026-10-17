@@ -13,6 +13,7 @@ pub mod pycompat;
 pub mod search;
 pub mod seqio;
 pub mod stage1;
+pub mod triage;
 pub mod window;
 
 pub use stage1::{Params, RunReport, STAGE1_ALGORITHM_VERSION, run};

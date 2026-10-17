@@ -10,5 +10,8 @@ authors.workspace = true
 [dependencies]
 amfsplit-regions = { path = "../amfsplit-regions" }
 anyhow = "1"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 sha2 = "0.10"
+
+[dev-dependencies]
+flate2 = "1"

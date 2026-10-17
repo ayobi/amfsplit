@@ -1,0 +1,80 @@
+{
+ "reads": 1017,
+ "calls": {
+  "AMF": {
+   "n": 932,
+   "pct": 91.6
+  },
+  "unresolved": {
+   "n": 63,
+   "pct": 6.2
+  },
+  "no_hit": {
+   "n": 10,
+   "pct": 1.0
+  },
+  "non_AMF": {
+   "n": 7,
+   "pct": 0.7
+  },
+  "no_window": {
+   "n": 5,
+   "pct": 0.5
+  }
+ },
+ "non_AMF_best_hits": [
+  [
+   "Mortierella",
+   1
+  ],
+  [
+   "Candida",
+   1
+  ],
+  [
+   "Endogone",
+   1
+  ],
+  [
+   "Rhizopus",
+   1
+  ],
+  [
+   "Homo",
+   1
+  ],
+  [
+   "Arabidopsis",
+   1
+  ]
+ ],
+ "params": {
+  "min_id": 90.0,
+  "amf_pattern": null,
+  "outgroups": [
+   "Arabidopsis",
+   "Candida",
+   "Endogone",
+   "Homo",
+   "Mortierella",
+   "Rhizopus",
+   "Schizosaccharomyces"
+  ],
+  "keep_unresolved": false
+ },
+ "amf_fastas": {
+  "windows.AMPLICON_AML1-LSUmBr.amf.fasta": 0,
+  "windows.LSU_D2_FLR3-FLR4.amf.fasta": 903,
+  "windows.LSU_LROR-FLR2.amf.fasta": 932,
+  "windows.SSU_NS31-AML2.amf.fasta": 903,
+  "windows.SSU_V4_AMV4.5NF-AMDGR.amf.fasta": 903,
+  "windows.SSU_V4_WANDA-AML2.amf.fasta": 903,
+  "windows.SSU_VT_NS31-AM1.amf.fasta": 875,
+  "windows.full_its.amf.fasta": 903,
+  "windows.its1.amf.fasta": 903,
+  "windows.its2.amf.fasta": 903,
+  "windows.lsu_flank.amf.fasta": 903,
+  "windows.s58.amf.fasta": 903,
+  "windows.ssu_flank.amf.fasta": 903
+ }
+}

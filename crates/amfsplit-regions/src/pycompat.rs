@@ -107,6 +107,96 @@ pub fn quantiles(values: &[i64], n: i64) -> Vec<f64> {
         .collect()
 }
 
+/// `statistics.median` of floats: the middle value for odd n, the mean of the two middle
+/// values for even n. Panics on empty input, as Python raises.
+pub fn median_f64(values: &[f64]) -> f64 {
+    let mut v = values.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
+    let n = v.len();
+    assert!(n > 0, "median of no data");
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// `Counter(items).most_common(n)`: counts in first-seen order, then a stable sort by count,
+/// highest first (ties keep first-seen order, as `sorted(..., reverse=True)` and
+/// `heapq.nlargest` do).
+pub fn most_common<'a, I: IntoIterator<Item = &'a str>>(
+    items: I,
+    n: Option<usize>,
+) -> Vec<(String, i64)> {
+    let mut c = OrderedCounter::default();
+    for it in items {
+        c.add(it, 1);
+    }
+    let mut v: Vec<(String, i64)> = c.items().to_vec();
+    v.sort_by_key(|x| std::cmp::Reverse(x.1)); // stable: ties keep first-seen order
+    if let Some(n) = n {
+        v.truncate(n);
+    }
+    v
+}
+
+/// Rows of a tab-separated file as Python's `csv.reader(fh, delimiter="\t")` parses them: a field
+/// that starts with a quote is quoted (doubled quotes inside it are one quote, and it may span
+/// lines); blank rows are dropped, as `csv.DictReader` drops them.
+pub fn read_tsv_rows(text: &str) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut chars = text.chars().peekable();
+    let (mut in_quotes, mut at_field_start, mut row_has_content) = (false, true, false);
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' if at_field_start => {
+                in_quotes = true;
+                at_field_start = false;
+                row_has_content = true;
+            }
+            '\t' => {
+                row.push(std::mem::take(&mut field));
+                at_field_start = true;
+                row_has_content = true;
+            }
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\n' | '\r' => {
+                if row_has_content || !field.is_empty() {
+                    row.push(std::mem::take(&mut field));
+                    rows.push(std::mem::take(&mut row));
+                }
+                at_field_start = true;
+                row_has_content = false;
+            }
+            c => {
+                field.push(c);
+                at_field_start = false;
+                row_has_content = true;
+            }
+        }
+    }
+    if row_has_content || !field.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    rows
+}
+
 /// `round(x, ndigits)` for a float: Python and Rust both round the exact binary value, ties to
 /// even, so formatting with the precision and parsing back gives Python's result.
 pub fn py_round(x: f64, ndigits: usize) -> f64 {
@@ -174,6 +264,7 @@ pub enum Json {
     Int(i64),
     Float(f64),
     Str(String),
+    Arr(Vec<Json>),
     Obj(Vec<(String, Json)>),
 }
 
@@ -205,6 +296,24 @@ impl Json {
             Json::Int(i) => out.push_str(&i.to_string()),
             Json::Float(f) => out.push_str(&json_float(*f)),
             Json::Str(s) => write_json_str(out, s),
+            Json::Arr(items) => {
+                if items.is_empty() {
+                    out.push_str("[]");
+                    return;
+                }
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                    out.push_str(&" ".repeat(level + 1));
+                    v.write(out, level + 1);
+                }
+                out.push('\n');
+                out.push_str(&" ".repeat(level));
+                out.push(']');
+            }
             Json::Obj(pairs) => {
                 if pairs.is_empty() {
                     out.push_str("{}");
@@ -377,6 +486,40 @@ mod tests {
         assert_eq!(
             j.dump_indent1(),
             "{\n \"a\": \"\\u00e9\\u0001\\\"\\\\\",\n \"c\": {},\n \"d\": {\n  \"x\": 1.0,\n  \"y\": null\n }\n}"
+        );
+    }
+
+    #[test]
+    fn arrays_and_counters_follow_python() {
+        let j = Json::obj(vec![
+            (
+                "t",
+                Json::Arr(vec![Json::Arr(vec![Json::Str("a".into()), Json::Int(2)])]),
+            ),
+            ("e", Json::Arr(vec![])),
+        ]);
+        assert_eq!(
+            j.dump_indent1(),
+            "{\n \"t\": [\n  [\n   \"a\",\n   2\n  ]\n ],\n \"e\": []\n}"
+        );
+        // Counter("abbcc").most_common(2) == [('b', 2), ('c', 2)]
+        assert_eq!(
+            most_common(["a", "b", "b", "c", "c"], Some(2)),
+            vec![("b".to_string(), 2), ("c".to_string(), 2)]
+        );
+        assert_eq!(median_f64(&[3.0, 1.0, 2.0, 10.0]), 2.5);
+    }
+
+    #[test]
+    fn tsv_rows_follow_python_csv() {
+        let rows = read_tsv_rows("a\tb\n\n\"x\ty\"\t\"q\"\"q\"\r\nlast");
+        assert_eq!(
+            rows,
+            vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["x\ty".to_string(), "q\"q".to_string()],
+                vec!["last".to_string()],
+            ]
         );
     }
 

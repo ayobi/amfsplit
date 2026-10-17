@@ -1,0 +1,7 @@
+case	options
+triage_default	--hits {hits} --out {out} --records {records} --fasta-prefix {prefix}
+triage_amf_pattern	--hits {hits} --out {out} --records {records} --fasta-prefix {prefix} --amf-pattern _[A-Z][a-z]+aceae_
+triage_ont_keep_unresolved	--hits {hits} --out {out} --records {records} --fasta-prefix {prefix} --min-id 85 --keep-unresolved
+triage_hits_only	--hits {hits} --out {out}
+triage_custom_outgroups	--hits {hits} --out {out} --records {records} --fasta-prefix {prefix} --outgroups Mortierella,Candida,Homo,Arabidopsis,Rhizopus,Endogone,Schizosaccharomyces
+triage_records_no_fasta	--hits {hits} --out {out} --records {records}

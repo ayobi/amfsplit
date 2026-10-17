@@ -1,0 +1,51 @@
+{
+ "reads": 1017,
+ "calls": {
+  "AMF": {
+   "n": 930,
+   "pct": 91.4
+  },
+  "unresolved": {
+   "n": 63,
+   "pct": 6.2
+  },
+  "no_hit": {
+   "n": 10,
+   "pct": 1.0
+  },
+  "non_AMF": {
+   "n": 9,
+   "pct": 0.9
+  },
+  "no_window": {
+   "n": 5,
+   "pct": 0.5
+  }
+ },
+ "non_AMF_best_hits": [
+  [
+   "Geosiphon",
+   2
+  ],
+  [
+   "Mortierella",
+   1
+  ],
+  [
+   "Candida",
+   1
+  ],
+  [
+   "Endogone",
+   1
+  ],
+  [
+   "Rhizopus",
+   1
+  ],
+  [
+   "Homo",
+   1
+  ]
+ ]
+}
