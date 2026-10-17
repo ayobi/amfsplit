@@ -43,14 +43,26 @@ cargo test --release                        # includes the parity test (no Pytho
 python3 -I parity/stage1/check_parity.py    # the same, with a field diff on failure
 ```
 
+## External checks (`run_external.sh`)
+
+Run on 16 October 2026 on Aaron's workstation: Ubuntu 24.04, g++ 13.3.0, rustc 1.97.1, Python edlib
+1.3.9.post1. The anchors are those of the original runs. The expected records are the v0.3.1
+files in amf-novelty-benchmark.
+
+| Check | Reads | Processed | Concatemers | Result |
+|---|---|---|---|---|
+| `stefani904`: all deposited culture sequences, PX215117.1 from GenBank | 904 | 904 | 0 | 15 outputs identical to the prototype |
+| `lgdb`: LongGloDB v1 test ASVs | 280 | 280 | 0 | 15 outputs identical; `records.tsv` equals `benchmarks/longglodb/stage1/windows/lgdb_test.records.tsv` |
+| `euk`: EUKARYOME v2.1 Glomeromycota queries | 5,546 | 5,541 | 1 | 15 outputs identical; `records.tsv` equals `benchmarks/eukaryome/stage1/euk_test.records.tsv` |
+
+The benchmark repo stores no v0.3.1 records for the 904 deposit (its `stefani.records.tsv` is a
+v0.2 output), so that check compares the port with the prototype only.
+
 ## Not covered here, and how to cover it
 
-- **PX215117.1.** It was dropped from culture reference v4 and GenBank is not reachable from this
-  workspace, so `stefani903` has 903 of the 904 deposited sequences. Check 1 of
-  `run_external.sh` runs all 904.
-- **LongGloDB v1 and EUKARYOME v2.1.** Their sequences are not redistributed. Checks 2 and 3 of
-  `run_external.sh` compare the port with the prototype and with the v0.3.1 records stored in
-  amf-novelty-benchmark.
+- **PX215117.1, LongGloDB v1 and EUKARYOME v2.1.** They are not in this repository (one is absent
+  from the reference, the others are not redistributed). They are covered by the external checks
+  above.
 - **Empty reads.** With the concatemer screen on, the prototype fails with a TypeError on a
   zero-length read. The port stops with an explicit error at the same point. Case
   `syn_empty_read` covers an empty read with the screen off.

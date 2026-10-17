@@ -16,7 +16,7 @@ release 0.3.1 assignment for assignment.
 
 | Step | State |
 |---|---|
-| `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done; byte-identical on 12 parity cases (`parity/stage1`) |
+| `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done. Byte-identical on the 12 parity cases, the 904 deposited culture sequences, the 280 LongGloDB ASVs and the 5,546 EUKARYOME reads (`parity/stage1`) |
 | `triage`: AMF or not, from the LSU window | Next |
 | `name`: VT, SH and LSU names, consensus, decision steps | To do |
 | `db`: references built from the user's downloads, checked by checksum | To do |
