@@ -12,9 +12,7 @@ use sha2::{Digest, Sha256};
 
 use amfsplit_regions::pycompat::Json;
 use amfsplit_regions::stage1::{Params, check_out_prefix, run};
-use amfsplit_regions::triage::{
-    DELAVAUX_OUTGROUPS, TriageParams, ValidateParams, triage, validate,
-};
+use amfsplit_regions::triage::{TriageParams, ValidateParams, triage, validate};
 
 #[derive(Parser)]
 #[command(
@@ -75,15 +73,20 @@ struct TriageArgs {
     /// Stage 1 output prefix; writes <file>.amf.fasta beside every <prefix>.*.fasta
     #[arg(long)]
     fasta_prefix: Option<String>,
-    /// Comma-separated non-AMF genera, read from the second underscore-separated field of the
-    /// target name. The default lists the outgroups of an older Delavaux release; for V18 use
-    /// --amf-pattern instead.
-    #[arg(long, default_value = DELAVAUX_OUTGROUPS)]
-    outgroups: String,
-    /// Regex marking AMF targets; overrides --outgroups (V18: '_[A-Z][a-z]+aceae_'; a reference
-    /// with lineages in its headers: 'Glomeromycota')
+    /// FASTA whose record IDs are the AMF targets; every other target is non-AMF. With the
+    /// Delavaux V18 LSU database, search V18_LSUDB_052025.fasta and give
+    /// V18_LSUDB_052025_AMFONLY.fasta here (recommended)
+    #[arg(long, conflicts_with_all = ["amf_pattern", "outgroups"])]
+    amf_reference: Option<PathBuf>,
+    /// Regex marking AMF targets; overrides --outgroups (e.g. 'Glomeromycota' for a reference
+    /// whose headers carry the lineage)
     #[arg(long)]
     amf_pattern: Option<String>,
+    /// Comma-separated non-AMF genera, read from the second underscore-separated field of the
+    /// target name. amfsplit v0.3.1 defaulted to Mortierella,Rhodotorula,Exophiala,Citrus, the
+    /// outgroups of an older Delavaux release
+    #[arg(long)]
+    outgroups: Option<String>,
     /// Identity (%) for a confident AMF call (~85 for ONT R9.4.1)
     #[arg(long, default_value_t = 90.0)]
     min_id: f64,
@@ -266,22 +269,31 @@ fn triage_cmd(a: TriageArgs) -> Result<()> {
     p.fasta_prefix = a.fasta_prefix;
     p.outgroups = a.outgroups;
     p.amf_pattern = a.amf_pattern;
+    p.amf_reference = a.amf_reference;
     p.min_id = a.min_id;
     p.keep_unresolved = a.keep_unresolved;
     let report = triage(&p)?;
     print!("{}", report.stdout);
-    if let Some(hint) = report.hint {
-        eprintln!("{hint}");
+    for note in report.notes {
+        eprintln!("{note}");
     }
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let cli = Cli::parse();
-    match cli.command {
+    let result = match cli.command {
         Command::Regions(a) => regions(a, &argv),
         Command::Validate(a) => validate_cmd(a),
         Command::Triage(a) => triage_cmd(a),
+    };
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            // the message and its causes, without anyhow's backtrace (RUST_BACKTRACE is often set)
+            eprintln!("error: {e:#}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }

@@ -2,7 +2,8 @@
 //! validate_windows.py (amfsplit v0.3.1) byte for byte. Golden files: parity/triage/make_golden.py.
 //!
 //! The triage cases run on stored inputs (Stage 1 windows plus test windows, and the vsearch hits
-//! of validate_windows.py). The validate case needs vsearch 2.27.0 and the Delavaux V18 database
+//! of validate_windows.py). The port has no default AMF rule: where a case relied on the
+//! prototype's default outgroups, the test passes them explicitly (`V031_DEFAULT_OUTGROUPS`). The validate case needs vsearch 2.27.0 and the Delavaux V18 database
 //! with outgroups, which are not stored here: set AMFSPLIT_TEST_VSEARCH and AMFSPLIT_TEST_V18 to
 //! run it; without them it is skipped, and says so.
 
@@ -11,8 +12,11 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use amfsplit_regions::triage::V031_DEFAULT_OUTGROUPS;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
+
+const V18_SHA256: &str = "28a806a6b1930e74e413b83d5c6cc5c5d71268a740ed38488d0bb25de9a494a7";
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +83,11 @@ fn triage_outputs_match_the_prototype() {
                 &d.join("windows.records.tsv").to_string_lossy(),
             )
             .replace("{prefix}", &d.join("windows").to_string_lossy());
+        let opts = if opts.contains("--outgroups") || opts.contains("--amf-pattern") {
+            opts
+        } else {
+            format!("{opts} --outgroups {V031_DEFAULT_OUTGROUPS}")
+        };
         let res = Command::new(env!("CARGO_BIN_EXE_amfsplit"))
             .arg("triage")
             .args(opts.split_whitespace())
@@ -122,6 +131,30 @@ fn validate_outputs_match_the_prototype() {
         );
         return;
     };
+    assert!(
+        !vsearch.is_empty(),
+        "AMFSPLIT_TEST_VSEARCH is set but empty: is vsearch on PATH (`which vsearch`)?"
+    );
+    assert!(
+        Path::new(&v18).is_file(),
+        "AMFSPLIT_TEST_V18 is not a file: {v18}"
+    );
+    assert_eq!(
+        sha256(Path::new(&v18)),
+        V18_SHA256,
+        "AMFSPLIT_TEST_V18 is not V18_LSUDB_052025.fasta with outgroups (Delavaux repo commit f4a0014): {v18}"
+    );
+    let version = Command::new(&vsearch)
+        .arg("--version")
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stderr)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string()
+        })
+        .unwrap_or_else(|e| panic!("cannot run {vsearch}: {e}"));
     let d = std::env::temp_dir().join(format!("amfsplit-validate-test-{}", std::process::id()));
     fs::create_dir_all(&d).unwrap();
     unpack_inputs(&d);
@@ -184,7 +217,7 @@ fn validate_outputs_match_the_prototype() {
     let _ = fs::remove_dir_all(&d);
     assert!(
         failures.is_empty(),
-        "{} mismatch(es):\n{}",
+        "{} mismatch(es) with {version} (the golden files were made with vsearch v2.27.0):\n{}",
         failures.len(),
         failures.join("\n")
     );

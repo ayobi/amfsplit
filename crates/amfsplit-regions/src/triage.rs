@@ -20,10 +20,10 @@ use crate::pycompat::{
     Json, float_repr, median_f64, most_common, py_first_token, py_round, read_tsv_rows,
 };
 
-/// The prototype's default non-AMF genera: the four outgroups of an older Delavaux LSU release.
-/// V18 (V18_LSUDB_052025.fasta) holds 35 non-AMF records, of which only Mortierella is listed
-/// here; see `nonamf_hint`.
-pub const DELAVAUX_OUTGROUPS: &str = "Mortierella,Rhodotorula,Exophiala,Citrus";
+/// The v0.3.1 prototype's default non-AMF genera: the four outgroups of an older Delavaux LSU
+/// release. V18 (V18_LSUDB_052025.fasta) holds 35 non-AMF records, of which only Mortierella is
+/// listed here, so the port has no default: the caller says which targets are AMF.
+pub const V031_DEFAULT_OUTGROUPS: &str = "Mortierella,Rhodotorula,Exophiala,Citrus";
 
 /// vsearch options of `validate_windows.py`, which the hits table depends on.
 pub const VSEARCH_FIXED: [&str; 8] = [
@@ -173,8 +173,12 @@ pub struct TriageParams {
     pub out: String,
     pub records: Option<PathBuf>,
     pub fasta_prefix: Option<String>,
-    pub outgroups: String,
+    /// Non-AMF genera, comma-separated (the prototype's way).
+    pub outgroups: Option<String>,
+    /// Regex marking AMF targets; overrides `outgroups`, as in the prototype.
     pub amf_pattern: Option<String>,
+    /// FASTA whose record IDs are the AMF targets (e.g. V18_LSUDB_052025_AMFONLY.fasta).
+    pub amf_reference: Option<PathBuf>,
     pub min_id: f64,
     pub keep_unresolved: bool,
 }
@@ -186,8 +190,9 @@ impl TriageParams {
             out,
             records: None,
             fasta_prefix: None,
-            outgroups: DELAVAUX_OUTGROUPS.into(),
+            outgroups: None,
             amf_pattern: None,
+            amf_reference: None,
             min_id: 90.0,
             keep_unresolved: false,
         }
@@ -201,11 +206,95 @@ struct Call {
     identity: Option<f64>,
 }
 
-/// What a triage run produced: the stdout text of the prototype, and a hint for the console.
+/// What a triage run produced: the stdout text of the prototype, and notes for the console.
 #[derive(Clone, Debug)]
 pub struct TriageReport {
     pub stdout: String,
-    pub hint: Option<String>,
+    pub notes: Vec<String>,
+}
+
+/// How a hit target is judged AMF.
+enum AmfRule {
+    /// Target ID listed in an AMF-only reference.
+    Reference {
+        ids: HashSet<String>,
+        path: String,
+        sha256: String,
+    },
+    /// Regex search on the target name (prototype: `--amf-pattern`).
+    Pattern(Regex),
+    /// Second underscore-separated field not among these genera (prototype: `--outgroups`).
+    Outgroups(Vec<String>),
+}
+
+/// Record IDs of a FASTA (plain or gzipped): the first whitespace-separated token of each header.
+fn reference_ids(path: &Path) -> Result<HashSet<String>> {
+    let mut ids = HashSet::new();
+    let mut r = crate::seqio::open_maybe_gz(path)?;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if r.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if line.first() == Some(&b'>') {
+            let id = py_first_token(&line[1..])
+                .with_context(|| format!("{}: empty header", path.display()))?;
+            ids.insert(String::from_utf8_lossy(id).into_owned());
+        }
+    }
+    Ok(ids)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    let mut f = fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    std::io::copy(&mut f, &mut h)?;
+    Ok(format!("{:x}", h.finalize()))
+}
+
+fn amf_rule(p: &TriageParams) -> Result<AmfRule> {
+    match (&p.amf_reference, &p.amf_pattern, &p.outgroups) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+            bail!("--amf-reference cannot be combined with --amf-pattern or --outgroups")
+        }
+        (Some(path), None, None) => {
+            let ids = reference_ids(path)?;
+            if ids.is_empty() {
+                bail!("--amf-reference {} holds no FASTA records", path.display());
+            }
+            Ok(AmfRule::Reference {
+                ids,
+                path: path.display().to_string(),
+                sha256: sha256_file(path)?,
+            })
+        }
+        (None, Some(pat), _) => {
+            Ok(AmfRule::Pattern(Regex::new(pat).with_context(|| {
+                format!("--amf-pattern is not a valid regex: {pat:?}")
+            })?))
+        }
+        (None, None, Some(list)) => {
+            let mut set: Vec<String> = Vec::new();
+            for g in list.split(',') {
+                let g = g.trim();
+                if !g.is_empty() && !set.iter().any(|x| x == g) {
+                    set.push(g.to_string());
+                }
+            }
+            set.sort();
+            Ok(AmfRule::Outgroups(set))
+        }
+        (None, None, None) => bail!(
+            "say which hit targets are AMF:\n  \
+             --amf-reference FASTA   the AMF records of the searched reference; with the Delavaux V18 LSU \
+             database, search V18_LSUDB_052025.fasta and give V18_LSUDB_052025_AMFONLY.fasta here (recommended)\n  \
+             --amf-pattern REGEX     a regex on the target name, e.g. 'Glomeromycota' for a reference with lineages in its headers\n  \
+             --outgroups GENERA      non-AMF genera; amfsplit v0.3.1 defaulted to {V031_DEFAULT_OUTGROUPS}, \
+             the outgroups of an older Delavaux release (only Mortierella is in V18)"
+        ),
+    }
 }
 
 /// Names of the files `glob.glob(f"{prefix}.*.fasta")` returns, sorted as Python sorts them.
@@ -255,10 +344,7 @@ fn fasta_ids(path: &Path) -> Result<Vec<String>> {
 /// Read IDs named AMF on a best hit that V18 marks as non-AMF: its header ends in a fungal
 /// lineage tag (Asco, Basid, Chyt, Zygo) or names Homo, Arabidopsis, Oryza or Geosiphon. Only a
 /// console hint; the outputs stay those of the prototype.
-fn nonamf_hint(calls: &[(String, Call)], uses_pattern: bool) -> Option<String> {
-    if uses_pattern {
-        return None;
-    }
+fn nonamf_hint(calls: &[(String, Call)]) -> Option<String> {
     let tagged = |t: &str| {
         ["_Asco", "_Basid", "_Chyt", "_Zygo"]
             .iter()
@@ -282,9 +368,8 @@ fn nonamf_hint(calls: &[(String, Call)], uses_pattern: bool) -> Option<String> {
         .join(", ");
     Some(format!(
         "note: {} read(s) were called AMF or unresolved on a best hit that the reference labels non-AMF \
-         (e.g. {examples}). --outgroups lists the outgroups of an older Delavaux release; with V18 \
-         (35 non-AMF records) use --amf-pattern '_[A-Z][a-z]+aceae_', which matches its 460 AMF \
-         records and none of the others.",
+         (e.g. {examples}). --outgroups names only some of the reference's non-AMF genera. With the \
+         Delavaux V18 LSU database, use --amf-reference V18_LSUDB_052025_AMFONLY.fasta instead.",
         flagged.len()
     ))
 }
@@ -292,28 +377,12 @@ fn nonamf_hint(calls: &[(String, Call)], uses_pattern: bool) -> Option<String> {
 /// `triage.py`: calls per read, `{out}.triage.tsv`, `{out}.amf.ids`, `{out}.triage.summary.json`,
 /// and with a FASTA prefix, `<file>.amf.fasta` beside every `{prefix}.*.fasta`.
 pub fn triage(p: &TriageParams) -> Result<TriageReport> {
-    let outgroups: Vec<String> = {
-        let mut set: Vec<String> = Vec::new();
-        for g in p.outgroups.split(',') {
-            let g = g.trim();
-            if !g.is_empty() && !set.iter().any(|x| x == g) {
-                set.push(g.to_string());
-            }
-        }
-        set.sort();
-        set
-    };
-    let amf_re = match &p.amf_pattern {
-        Some(pat) => Some(
-            Regex::new(pat)
-                .with_context(|| format!("--amf-pattern is not a valid regex: {pat:?}"))?,
-        ),
-        None => None,
-    };
+    let rule = amf_rule(p)?;
     let is_amf = |target: &str| -> bool {
-        match &amf_re {
-            Some(re) => re.is_match(target),
-            None => {
+        match &rule {
+            AmfRule::Reference { ids, .. } => ids.contains(target),
+            AmfRule::Pattern(re) => re.is_match(target),
+            AmfRule::Outgroups(outgroups) => {
                 let parts: Vec<&str> = target.split('_').collect();
                 parts.len() < 2 || !outgroups.iter().any(|g| g == parts[1])
             }
@@ -340,6 +409,30 @@ pub fn triage(p: &TriageParams) -> Result<TriageReport> {
             }
             Some(b) if ident > b.1 => *b = (f[1].to_string(), ident),
             Some(_) => {}
+        }
+    }
+
+    let mut notes = Vec::new();
+    if let AmfRule::Reference { ids, path, .. } = &rule {
+        let targets: HashSet<&str> = text
+            .split_inclusive('\n')
+            .filter_map(|l| l.split('\t').nth(1))
+            .collect();
+        let n_amf = targets.iter().filter(|t| ids.contains(**t)).count();
+        if !targets.is_empty() && n_amf == 0 {
+            bail!(
+                "none of the {} hit targets is in --amf-reference {path}: the search reference and the \
+                 AMF reference must come from the same database release",
+                targets.len()
+            );
+        }
+        if !targets.is_empty() && n_amf == targets.len() {
+            notes.push(format!(
+                "note: all {} hit targets are in the AMF reference, so no read can be called non_AMF. \
+                 If `amfsplit validate` searched the AMF-only file, search the full reference instead \
+                 (with Delavaux V18: V18_LSUDB_052025.fasta).",
+                targets.len()
+            ));
         }
     }
 
@@ -481,25 +574,37 @@ pub fn triage(p: &TriageParams) -> Result<TriageReport> {
         ("reads".to_string(), Json::Int(n)),
         ("calls".to_string(), calls_json),
         ("non_AMF_best_hits".to_string(), pairs(&non_amf)),
-        (
-            "params".to_string(),
-            Json::obj(vec![
-                ("min_id", Json::Float(p.min_id)),
+        ("params".to_string(), {
+            let mut params = vec![
+                ("min_id".to_string(), Json::Float(p.min_id)),
                 (
-                    "amf_pattern",
+                    "amf_pattern".to_string(),
                     p.amf_pattern.clone().map_or(Json::Null, Json::Str),
                 ),
                 (
-                    "outgroups",
-                    if amf_re.is_some() {
-                        Json::Null
-                    } else {
-                        Json::Arr(outgroups.iter().map(|g| Json::Str(g.clone())).collect())
+                    "outgroups".to_string(),
+                    match &rule {
+                        AmfRule::Outgroups(o) => {
+                            Json::Arr(o.iter().map(|g| Json::Str(g.clone())).collect())
+                        }
+                        _ => Json::Null,
                     },
                 ),
-                ("keep_unresolved", Json::Bool(p.keep_unresolved)),
-            ]),
-        ),
+            ];
+            // only with --amf-reference, so the prototype's modes keep its exact summary
+            if let AmfRule::Reference { ids, path, sha256 } = &rule {
+                params.push((
+                    "amf_reference".to_string(),
+                    Json::obj(vec![
+                        ("path", Json::Str(path.clone())),
+                        ("sha256", Json::Str(sha256.clone())),
+                        ("records", Json::Int(ids.len() as i64)),
+                    ]),
+                ));
+            }
+            params.push(("keep_unresolved".to_string(), Json::Bool(p.keep_unresolved)));
+            Json::Obj(params)
+        }),
     ];
 
     if let Some(prefix) = &p.fasta_prefix {
@@ -550,6 +655,11 @@ pub fn triage(p: &TriageParams) -> Result<TriageReport> {
     let stdout = Json::Obj(summary.into_iter().take(3).collect()).dump_indent1() + "\n";
     Ok(TriageReport {
         stdout,
-        hint: nonamf_hint(&calls, amf_re.is_some()),
+        notes: {
+            if matches!(rule, AmfRule::Outgroups(_)) {
+                notes.extend(nonamf_hint(&calls));
+            }
+            notes
+        },
     })
 }

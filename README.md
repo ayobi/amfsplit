@@ -17,7 +17,7 @@ release 0.3.1 assignment for assignment.
 | Step | State |
 |---|---|
 | `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done. Byte-identical on the 12 parity cases, the 904 deposited culture sequences, the 280 LongGloDB ASVs and the 5,546 EUKARYOME reads (`parity/stage1`) |
-| `validate` + `triage`: AMF or not, from the best hit of the LR0R–FLR2 window (validate_windows.py and triage.py v0.3.1) | Done. Byte-identical on 7 parity cases, vsearch included (`parity/triage`); the default outgroups do not fit V18 (see there) |
+| `validate` + `triage`: AMF or not, from the best hit of the LR0R–FLR2 window (validate_windows.py and triage.py v0.3.1) | Done. Byte-identical on 7 parity cases, vsearch included. New `--amf-reference`, and no default AMF rule, because the prototype's default outgroups do not fit V18 (`parity/triage`) |
 | `name`: VT, SH and LSU names, consensus, decision steps | Next |
 | `db`: references built from the user's downloads, checked by checksum | To do |
 
@@ -29,6 +29,12 @@ Needs a Rust toolchain (edition 2024) and a C++11 compiler (edlib is compiled fr
 cargo build --release
 target/release/amfsplit regions -i reads.fq.gz -a reads.anchors.tsv -p panels/amf_legacy_windows.tsv \
     -o out/sample --only-anchored --open-ends
+# AMF triage on the LR0R-FLR2 windows, against Delavaux V18 with its outgroups
+target/release/amfsplit validate -w out/sample.LSU_LROR-FLR2.fasta -r V18_LSUDB_052025.fasta \
+    -o out/sample.LSU_LROR-FLR2.vs_v18 --threads 8
+target/release/amfsplit triage --hits out/sample.LSU_LROR-FLR2.vs_v18.hits.tsv --out out/sample \
+    --records out/sample.records.tsv --fasta-prefix out/sample \
+    --amf-reference V18_LSUDB_052025_AMFONLY.fasta --min-id 90      # 85 for ONT R9.4.1
 cargo test --release
 ```
 
