@@ -1,0 +1,249 @@
+{
+ "reads": 903,
+ "reads_processed": 903,
+ "orientation_source": {
+  "itsxrust": 903
+ },
+ "itsxrust_regions": {
+  "ssu_flank": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 1473,
+    "q1": 1472.0,
+    "q3": 1474.0,
+    "min": 1466,
+    "max": 1476
+   }
+  },
+  "its1": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 106,
+    "q1": 100.0,
+    "q3": 109.0,
+    "min": 68,
+    "max": 209
+   }
+  },
+  "s58": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 158,
+    "q1": 157.0,
+    "q3": 158.0,
+    "min": 151,
+    "max": 170
+   }
+  },
+  "its2": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 202,
+    "q1": 194.0,
+    "q3": 221.0,
+    "min": 169,
+    "max": 248
+   }
+  },
+  "full_its": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 466,
+    "q1": 450.0,
+    "q3": 488.0,
+    "min": 395,
+    "max": 559
+   }
+  },
+  "lsu_flank": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 825,
+    "q1": 819.0,
+    "q3": 830.0,
+    "min": 764,
+    "max": 838
+   }
+  }
+ },
+ "windows": {
+  "AMPLICON_AML1-LSUmBr": {
+   "target": "QC: full nested amplicon (AAFC / Kolarikova-style)",
+   "primers": "AML1/LSUmBr",
+   "ok": 0,
+   "open": 8,
+   "usable": 8,
+   "ok_pct": 0.0,
+   "usable_pct": 0.9,
+   "status": {
+    "both_missing": 895,
+    "open_5p": 8
+   },
+   "length": {
+    "n": 8,
+    "median": 2625.5,
+    "q1": 2621.25,
+    "q3": 2627.5,
+    "min": 2620,
+    "max": 2630
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_VT_NS31-AM1": {
+   "target": "MaarjAM virtual taxa (VT defined on NS31-AM1)",
+   "primers": "NS31/AM1",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 508,
+    "q1": 507.0,
+    "q3": 509.0,
+    "min": 502,
+    "max": 511
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_NS31-AML2": {
+   "target": "SSU studies using NS31-AML2",
+   "primers": "NS31/AML2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 522,
+    "q1": 521.0,
+    "q3": 523.0,
+    "min": 516,
+    "max": 525
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_V4_WANDA-AML2": {
+   "target": "SSU V4 datasets (WANDA-AML2 studies)",
+   "primers": "WANDA/AML2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 500,
+    "q1": 499.0,
+    "q3": 501.0,
+    "min": 494,
+    "max": 503
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_V4_AMV4.5NF-AMDGR": {
+   "target": "SSU V4 short amplicon (AMV4.5NF-AMDGR studies)",
+   "primers": "AMV4.5NF/AMDGR",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 216,
+    "q1": 215.0,
+    "q3": 217.0,
+    "min": 212,
+    "max": 219
+   },
+   "crosses_its_anchor": 0
+  },
+  "LSU_LROR-FLR2": {
+   "target": "Delavaux AMF-LSU backbone (LROR-FLR2 database)",
+   "primers": "LROR/FLR2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 735,
+    "q1": 732.0,
+    "q3": 742.0,
+    "min": 676,
+    "max": 750
+   },
+   "crosses_its_anchor": 0
+  },
+  "LSU_D2_FLR3-FLR4": {
+   "target": "LSU D2 datasets (FLR3-FLR4 studies)",
+   "primers": "FLR3/FLR4",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 328,
+    "q1": 323.0,
+    "q3": 332.0,
+    "min": 267,
+    "max": 336
+   },
+   "crosses_its_anchor": 0
+  }
+ },
+ "concatemers": {
+  "flagged": 0,
+  "pct": 0.0,
+  "full": 0,
+  "partial": 0,
+  "kept_in_fasta": false
+ },
+ "region_limited_reads": 903,
+ "params": {
+  "version": "0.3.1",
+  "max_err_frac": 0.2,
+  "keep_primers": false,
+  "open_ends": true,
+  "only_anchored": true,
+  "region_margin": 50,
+  "region_limit": true,
+  "concat_screen": true,
+  "concat_min_primers": 2,
+  "concat_min_sep": 150,
+  "concat_tol": 0.05,
+  "concat_sim": 0.4,
+  "concat_strong": 3,
+  "concat_err_frac": 0.2
+ }
+}

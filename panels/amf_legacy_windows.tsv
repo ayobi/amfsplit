@@ -1,0 +1,12 @@
+# Legacy AMF barcode windows cut from long SSU-ITS-LSU reads at their original primer sites.
+# Reverse primers are given as published (5'->3'); amfsplit reverse-complements them to locate the site.
+# Primer sequences were entered from the primary literature; confirm each against the source paper before
+# publication. Length ranges are deliberately loose; tighten them from the empirical distributions.
+window	target	fwd_name	fwd_seq	rev_name	rev_seq	min_len	max_len	source
+AMPLICON_AML1-LSUmBr	QC: full nested amplicon (AAFC / Kolarikova-style)	AML1	ATCAACTTTCGATGGTAGGATAGA	LSUmBr	AACACTCGCAYAYATGYTAGA	2000	3800	Lee et al. 2008; Kruger et al. 2009 (degenerate LSUmBr as in the AAFC config)
+SSU_VT_NS31-AM1	MaarjAM virtual taxa (VT defined on NS31-AM1)	NS31	TTGGAGGGCAAGTCTGGTGCC	AM1	GTTTCCCGTAAGGCGCCGAA	400	700	Simon et al. 1992; Helgason et al. 1998; Opik et al. 2010
+SSU_NS31-AML2	SSU studies using NS31-AML2	NS31	TTGGAGGGCAAGTCTGGTGCC	AML2	GAACCCAAACACTTTGGTTTCC	400	700	Simon et al. 1992; Lee et al. 2008
+SSU_V4_WANDA-AML2	SSU V4 datasets (WANDA-AML2 studies)	WANDA	CAGCCGCGGTAATTCCAGCT	AML2	GAACCCAAACACTTTGGTTTCC	350	650	Dumbrell et al. 2011; Lee et al. 2008
+SSU_V4_AMV4.5NF-AMDGR	SSU V4 short amplicon (AMV4.5NF-AMDGR studies)	AMV4.5NF	AAGCTCGTAGTTGAATTTCG	AMDGR	CCCAACTATCCCTATTAATCAT	180	350	Sato et al. 2005
+LSU_LROR-FLR2	Delavaux AMF-LSU backbone (LROR-FLR2 database)	LROR	ACCCGCTGAACTTAAGC	FLR2	GTCGTTTAAAGCCATTACGTC	450	900	Delavaux et al. 2021/2022/2024; Trouvelot et al. 1999
+LSU_D2_FLR3-FLR4	LSU D2 datasets (FLR3-FLR4 studies)	FLR3	TTGAAAGGGAAACGATTGAAGT	FLR4	TACGTCAACATCCTTAACGAA	200	400	Gollotte et al. 2004

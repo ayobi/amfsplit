@@ -1,0 +1,12 @@
+[package]
+name = "amfsplit-regions"
+description = "Region extraction for long-read SSU-ITS-LSU AMF sequences: ITSxRust anchors plus legacy primer windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = "1"
+amfsplit-edlib = { path = "../amfsplit-edlib" }
+flate2 = "1"

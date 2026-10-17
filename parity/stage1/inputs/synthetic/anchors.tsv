@@ -1,0 +1,21 @@
+read_id	its1_start	its1_end	its2_start	its2_end	full_start	full_end	confidence	ssu_strand	s58s_strand	s58e_strand	lsu_strand
+A_clean	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+B_am1_absent	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+C_am1_absent_decoy	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+D_nested_5p	591	699	856	1055	591	1055	confident	+	+	+	+
+E_trunc_3p	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+F_lror_absent	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+G_concat_tandem	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+H_concat_inverted	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+K_spurious_repeats	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+N_concat_different_molecule	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+L_partial_tandem	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+M_partial_foldback	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+O_minus_strand	1601	1709	1866	2065	1601	2065	confident	-	-	-	-
+P_no_strand	1601	1709	1866	2065	1601	2065	confident				
+Q_lowercase_N	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+T_empty_confidence	1601	1709	1866	2065	1601	2065		+	+	+	+
+U_partial_chain	1601	1709			1601	2065	confident	+	+	+	+
+V_ssu_at_start	1	109	266	465	1	465	confident	+	+	+	+
+Y_out_of_order	1601	1709	1866	2065	1601	2065	confident	+	+	+	+
+Z_too_short	1601	1709	1866	2065	1601	2065	confident	+	+	+	+

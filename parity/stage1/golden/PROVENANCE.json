@@ -1,0 +1,19 @@
+{
+ "prototype": "amfsplit_v0_3_1.py",
+ "prototype_sha256": "a7d79a637095894aea6c8c68b13944a0204d187889185590ad3df44ca0aa4a05",
+ "python": "3.13.16",
+ "edlib": "1.3.9.post1",
+ "inputs": {
+  "inputs/stefani903/anchors.tsv.gz": "905041852906eb08c9cb3b12ee38f541f1a87470fbfb69ea51b13c752ba22215",
+  "inputs/stefani903/reads.fasta.gz": "e61b8585138526f59a6b4d40f073562a11c2881523e761d6198d634fa2be4e38",
+  "inputs/synthetic/anchors.tsv": "2c8cb240a8d1ae5083af8c0848418da7845a02e09b5d60d2fa72af308ec2ed12",
+  "inputs/synthetic/empty.fa": "498d3366dbe5de241a77b6edf8d4667aa105afba22f53f971bae27fa3fead554",
+  "inputs/synthetic/panel.tsv": "d96750572e6a46641ec0e094bd657ca1e70b55df211ab65affcdb400402918ae",
+  "inputs/synthetic/panel_regions.tsv": "04e2517ed6e7136abdcf031d8ea9c57f7d9e2b17626b9b5e0bf1be82692201aa",
+  "inputs/synthetic/reads.fa": "5b324a190984723781783d6f7221828c6d615dde1ae7d7dc68dfc2be8e70981b",
+  "inputs/synthetic/reads.fq.gz": "a96549bd383887205043424041da377eceee233fcd3644bc0315b9124fffaefe"
+ },
+ "panel": {
+  "panels/amf_legacy_windows.tsv": "52efeb25eedb9408acb9f04d42b4753068418ac4833ecf705e558ad1142bb2ea"
+ }
+}

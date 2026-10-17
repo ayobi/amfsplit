@@ -1,0 +1,11 @@
+[package]
+name = "amfsplit-edlib"
+description = "Minimal FFI to a vendored copy of edlib (the C++ core shipped with Python edlib 1.3.9.post1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+links = "edlib"
+
+[build-dependencies]
+cc = "1"

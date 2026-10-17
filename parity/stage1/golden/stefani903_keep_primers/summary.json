@@ -1,0 +1,243 @@
+{
+ "reads": 903,
+ "reads_processed": 903,
+ "orientation_source": {
+  "itsxrust": 903
+ },
+ "itsxrust_regions": {
+  "ssu_flank": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 1473,
+    "q1": 1472.0,
+    "q3": 1474.0,
+    "min": 1466,
+    "max": 1476
+   }
+  },
+  "its1": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 106,
+    "q1": 100.0,
+    "q3": 109.0,
+    "min": 68,
+    "max": 209
+   }
+  },
+  "s58": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 158,
+    "q1": 157.0,
+    "q3": 158.0,
+    "min": 151,
+    "max": 170
+   }
+  },
+  "its2": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 202,
+    "q1": 194.0,
+    "q3": 221.0,
+    "min": 169,
+    "max": 248
+   }
+  },
+  "full_its": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 466,
+    "q1": 450.0,
+    "q3": 488.0,
+    "min": 395,
+    "max": 559
+   }
+  },
+  "lsu_flank": {
+   "reads": 903,
+   "length": {
+    "n": 903,
+    "median": 825,
+    "q1": 819.0,
+    "q3": 830.0,
+    "min": 764,
+    "max": 838
+   }
+  }
+ },
+ "windows": {
+  "AMPLICON_AML1-LSUmBr": {
+   "target": "QC: full nested amplicon (AAFC / Kolarikova-style)",
+   "primers": "AML1/LSUmBr",
+   "ok": 0,
+   "open": 0,
+   "usable": 0,
+   "ok_pct": 0.0,
+   "usable_pct": 0.0,
+   "status": {
+    "both_missing": 903
+   },
+   "length": null,
+   "crosses_its_anchor": 0
+  },
+  "SSU_VT_NS31-AM1": {
+   "target": "MaarjAM virtual taxa (VT defined on NS31-AM1)",
+   "primers": "NS31/AM1",
+   "ok": 875,
+   "open": 0,
+   "usable": 875,
+   "ok_pct": 96.9,
+   "usable_pct": 96.9,
+   "status": {
+    "missing_3p": 28,
+    "ok": 875
+   },
+   "length": {
+    "n": 875,
+    "median": 549,
+    "q1": 548.0,
+    "q3": 550.0,
+    "min": 543,
+    "max": 552
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_NS31-AML2": {
+   "target": "SSU studies using NS31-AML2",
+   "primers": "NS31/AML2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 565,
+    "q1": 564.0,
+    "q3": 566.0,
+    "min": 559,
+    "max": 568
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_V4_WANDA-AML2": {
+   "target": "SSU V4 datasets (WANDA-AML2 studies)",
+   "primers": "WANDA/AML2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 542,
+    "q1": 541.0,
+    "q3": 543.0,
+    "min": 536,
+    "max": 545
+   },
+   "crosses_its_anchor": 0
+  },
+  "SSU_V4_AMV4.5NF-AMDGR": {
+   "target": "SSU V4 short amplicon (AMV4.5NF-AMDGR studies)",
+   "primers": "AMV4.5NF/AMDGR",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 258,
+    "q1": 257.0,
+    "q3": 259.0,
+    "min": 254,
+    "max": 261
+   },
+   "crosses_its_anchor": 0
+  },
+  "LSU_LROR-FLR2": {
+   "target": "Delavaux AMF-LSU backbone (LROR-FLR2 database)",
+   "primers": "LROR/FLR2",
+   "ok": 903,
+   "open": 0,
+   "usable": 903,
+   "ok_pct": 100.0,
+   "usable_pct": 100.0,
+   "status": {
+    "ok": 903
+   },
+   "length": {
+    "n": 903,
+    "median": 773,
+    "q1": 770.0,
+    "q3": 780.0,
+    "min": 714,
+    "max": 788
+   },
+   "crosses_its_anchor": 0
+  },
+  "LSU_D2_FLR3-FLR4": {
+   "target": "LSU D2 datasets (FLR3-FLR4 studies)",
+   "primers": "FLR3/FLR4",
+   "ok": 878,
+   "open": 0,
+   "usable": 878,
+   "ok_pct": 97.2,
+   "usable_pct": 97.2,
+   "status": {
+    "ok": 878,
+    "missing_3p": 25
+   },
+   "length": {
+    "n": 878,
+    "median": 371.5,
+    "q1": 366.0,
+    "q3": 375.0,
+    "min": 310,
+    "max": 379
+   },
+   "crosses_its_anchor": 0
+  }
+ },
+ "concatemers": {
+  "flagged": 0,
+  "pct": 0.0,
+  "full": 0,
+  "partial": 0,
+  "kept_in_fasta": true
+ },
+ "region_limited_reads": 903,
+ "params": {
+  "version": "0.3.1",
+  "max_err_frac": 0.15,
+  "keep_primers": true,
+  "open_ends": false,
+  "only_anchored": false,
+  "region_margin": 50,
+  "region_limit": true,
+  "concat_screen": true,
+  "concat_min_primers": 2,
+  "concat_min_sep": 150,
+  "concat_tol": 0.05,
+  "concat_sim": 0.4,
+  "concat_strong": 3,
+  "concat_err_frac": 0.15
+ }
+}

@@ -1,0 +1,13 @@
+case	reads	anchors	panel	options
+syn_default	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--open-ends --max-err-frac 0.15
+syn_keep_concatemers	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--open-ends --keep-concatemers
+syn_v02_like	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--open-ends --no-region-limit --no-concat-screen
+syn_keep_primers_closed	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--keep-primers
+syn_only_anchored_margin0	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--open-ends --only-anchored --region-margin 0
+syn_fastq_concat_params	inputs/synthetic/reads.fq.gz	inputs/synthetic/anchors.tsv	inputs/synthetic/panel.tsv	--open-ends --max-err-frac 0.2 --concat-min-primers 3 --concat-strong 2 --concat-err-frac 0.1 --concat-sim 0.3 --concat-tol 0.1 --concat-min-sep 400
+syn_panel_regions	inputs/synthetic/reads.fa	inputs/synthetic/anchors.tsv	inputs/synthetic/panel_regions.tsv	--open-ends --region-margin 120
+syn_no_anchors	inputs/synthetic/reads.fa		inputs/synthetic/panel.tsv	--open-ends
+syn_empty_read	inputs/synthetic/empty.fa		inputs/synthetic/panel.tsv	--open-ends --no-concat-screen
+stefani903_hifi	inputs/stefani903/reads.fasta.gz	inputs/stefani903/anchors.tsv.gz	../../panels/amf_legacy_windows.tsv	--max-err-frac 0.15 --only-anchored --open-ends
+stefani903_ont	inputs/stefani903/reads.fasta.gz	inputs/stefani903/anchors.tsv.gz	../../panels/amf_legacy_windows.tsv	--max-err-frac 0.20 --only-anchored --open-ends
+stefani903_keep_primers	inputs/stefani903/reads.fasta.gz	inputs/stefani903/anchors.tsv.gz	../../panels/amf_legacy_windows.tsv	--keep-primers --keep-concatemers

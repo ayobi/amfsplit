@@ -1,0 +1,13 @@
+[package]
+name = "amfsplit"
+description = "Long-read AMF metabarcoding: regions, names and honest uncertainty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+amfsplit-regions = { path = "../amfsplit-regions" }
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+sha2 = "0.10"
