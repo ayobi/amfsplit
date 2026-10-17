@@ -9,22 +9,30 @@
 # (the v0.3.1 records stored in amf-novelty-benchmark). OPTIONS default to the options of the
 # deposited copies: --max-err-frac 0.15 --only-anchored --open-ends.
 #
-# The three checks to run (paths as in amf-novelty-benchmark; B = that repository):
-#   1. the 904 deposited culture sequences (adds PX215117.1, absent from this workspace):
-#        run_external.sh stefani904 stefani_deposit.fasta $B/benchmarks/stefani/out/itsx/stefani.anchors.tsv
-#   2. LongGloDB v1 test ASVs (reads from stage3/longglodb_overlap.py, never committed):
-#        run_external.sh lgdb bench/longglodb/overlap.test_full.fasta \
+# Every run ends with exactly one line starting "ok", "DIFF" or "FAIL"; it never fails silently.
+# KEEP=1 keeps both sets of outputs (py.* and rs.*) and the logs for inspection.
+#
+# The three checks (B = your amf-novelty-benchmark clone):
+#   1. the 904 deposited culture sequences:
+#        run_external.sh stefani904 stefani904.fasta $B/benchmarks/stefani/out/itsx/stefani.anchors.tsv
+#   2. LongGloDB v1 test ASVs (reads from stage3/longglodb_overlap.py):
+#        run_external.sh lgdb overlap.test_full.fasta \
 #          $B/benchmarks/longglodb/stage1/itsx/lgdb_test.anchors.tsv \
 #          $B/benchmarks/longglodb/stage1/windows/lgdb_test.records.tsv
-#   3. EUKARYOME v2.1 Glomeromycota queries (euk21_glo_query.fasta, SHA-256 aaab407b...; anchors from
-#      the local ITSxRust 0.3.0 run, hifi preset, tolerant thresholds as in run_stage1.sh):
-#        run_external.sh euk euk21_glo_query.fasta bench/eukaryome/stage1/itsx/euk_test.anchors.tsv \
+#   3. EUKARYOME v2.1 Glomeromycota queries (euk21_glo_query.fasta) with their ITSxRust anchors:
+#        run_external.sh euk euk21_glo_query.fasta euk_test.anchors.tsv \
 #          $B/benchmarks/eukaryome/stage1/euk_test.records.tsv
-set -euo pipefail
+set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-NAME=${1:?name}; READS=${2:?reads}; ANCHORS=${3:?anchors}; shift 3
+die() { echo "FAIL ${NAME:-?}: $*"; exit 1; }
+
+if [[ $# -lt 3 ]]; then
+  sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+NAME=$1; READS=$2; ANCHORS=$3; shift 3
 EXPECTED=""
 if [[ $# -gt 0 && "$1" != "--" ]]; then EXPECTED=$1; shift; fi
 [[ $# -gt 0 && "$1" == "--" ]] && shift
@@ -32,30 +40,46 @@ OPTS=("$@")
 [[ ${#OPTS[@]} -eq 0 ]] && OPTS=(--max-err-frac 0.15 --only-anchored --open-ends)
 BIN=${AMFSPLIT_BIN:-$ROOT/target/release/amfsplit}
 PANEL=${PANEL:-$ROOT/panels/amf_legacy_windows.tsv}
-[[ -x "$BIN" ]] || { echo "build first: cargo build --release" >&2; exit 2; }
+
+# inputs first: a wrong path is the commonest failure
+[[ -f "$READS" ]] || die "reads not found: $READS"
+[[ -f "$ANCHORS" ]] || die "anchors not found: $ANCHORS"
+[[ -z "$EXPECTED" || -f "$EXPECTED" ]] || die "expected records not found: $EXPECTED"
+[[ -f "$PANEL" ]] || die "panel not found: $PANEL"
+[[ -x "$BIN" ]] || die "Rust binary not found: $BIN (run: cargo build --release)"
+python3 -c "import edlib" 2> /dev/null || die "python3 has no edlib (activate the env that ran amfsplit.py)"
 
 W=$(mktemp -d "${TMPDIR:-/tmp}/amfsplit-external-$NAME.XXXXXX")
-[[ -n "${KEEP:-}" ]] || trap 'rm -rf "$W"' EXIT   # KEEP=1 keeps both sets of outputs for diffing
+[[ -n "${KEEP:-}" ]] || trap 'rm -rf "$W"' EXIT
 A="$ANCHORS"
-if [[ "$A" == *.gz ]]; then gzip -dc "$A" > "$W/anchors.tsv"; A="$W/anchors.tsv"; fi   # the prototype reads plain text
+if [[ "$A" == *.gz ]]; then gzip -dc "$A" > "$W/anchors.tsv" || die "cannot decompress $ANCHORS"; A="$W/anchors.tsv"; fi
 
-python3 -I "$HERE/python/amfsplit_v0_3_1.py" -i "$READS" -a "$A" -p "$PANEL" -o "$W/py" "${OPTS[@]}" 2> "$W/py.log"
-"$BIN" regions -i "$READS" -a "$ANCHORS" -p "$PANEL" -o "$W/rs" "${OPTS[@]}" 2> "$W/rs.log"
+if ! python3 -I "$HERE/python/amfsplit_v0_3_1.py" -i "$READS" -a "$A" -p "$PANEL" -o "$W/py" "${OPTS[@]}" 2> "$W/py.log"; then
+  echo "     prototype log (last lines):"; tail -n 5 "$W/py.log" | sed 's/^/     /'
+  die "the prototype failed"
+fi
+if ! "$BIN" regions -i "$READS" -a "$ANCHORS" -p "$PANEL" -o "$W/rs" "${OPTS[@]}" 2> "$W/rs.log"; then
+  echo "     amfsplit log (last lines):"; tail -n 5 "$W/rs.log" | sed 's/^/     /'
+  die "the Rust port failed"
+fi
 
+counts=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(f\"{d['reads']} reads, {d['reads_processed']} processed, {d['concatemers']['flagged']} concatemers\")" "$W/rs.summary.json")
 fail=0; n=0
 for f in "$W"/py.*; do
   base=${f#"$W/py."}
   [[ "$base" == "log" ]] && continue
   n=$((n + 1))
-  if ! cmp -s "$f" "$W/rs.$base"; then echo "DIFF $NAME: $base"; fail=1; fi
+  if [[ ! -f "$W/rs.$base" ]]; then echo "     missing from the port: $base"; fail=1
+  elif ! cmp -s "$f" "$W/rs.$base"; then echo "     differs: $base"; fail=1; fi
 done
 if [[ -n "$EXPECTED" ]]; then
-  if cmp -s "$W/rs.records.tsv" "$EXPECTED"; then echo "ok   $NAME: records.tsv equals $EXPECTED"
-  else echo "DIFF $NAME: records.tsv differs from $EXPECTED"; fail=1; fi
+  if cmp -s "$W/rs.records.tsv" "$EXPECTED"; then echo "     records.tsv equals $EXPECTED"
+  else echo "     records.tsv differs from $EXPECTED"; fail=1; fi
 fi
 if [[ $fail -eq 0 ]]; then
-  echo "ok   $NAME: $n output files identical to the prototype ($(grep -c . "$W/rs.records.tsv") records lines)"
+  echo "ok   $NAME: $n output files identical to the prototype ($counts)"
 else
-  echo "rerun with KEEP=1 to keep the prototype (py.*) and port (rs.*) outputs in $W"
+  [[ -n "${KEEP:-}" ]] && echo "     outputs kept in $W" || echo "     rerun with KEEP=1 to keep the outputs"
+  echo "DIFF $NAME ($counts)"
 fi
 exit $fail
