@@ -5,6 +5,7 @@ members = ["crates/amfsplit-edlib", "crates/amfsplit-regions", "crates/amfsplit"
 [workspace.package]
 version = "0.1.0-dev"
 edition = "2024"
+rust-version = "1.88"
 license = "MIT"
 authors = ["Aaron O'Brien <obrien.aaron.g@gmail.com>"]
 repository = "https://github.com/ayobi/amfsplit"

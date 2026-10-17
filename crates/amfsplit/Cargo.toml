@@ -3,6 +3,7 @@ name = "amfsplit"
 description = "Long-read AMF metabarcoding: regions, names and honest uncertainty"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
