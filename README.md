@@ -18,7 +18,8 @@ release 0.3.1 assignment for assignment.
 |---|---|
 | `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done. Byte-identical on the 12 parity cases, the 904 deposited culture sequences, the 280 LongGloDB ASVs and the 5,546 EUKARYOME reads (`parity/stage1`) |
 | `validate` + `triage`: AMF or not, from the best hit of the LR0R–FLR2 window (validate_windows.py and triage.py v0.3.1) | Done. Byte-identical on 7 parity cases, vsearch included. New `--amf-reference`, and no default AMF rule, because the prototype's default outgroups do not fit V18 (`parity/triage`) |
-| `name`: VT, SH and LSU names, consensus, decision steps | Next |
+| `gate0`: frozen M2b naming method and per-copy parity | Implemented in `amfsplit-naming`; must pass `cargo test -p amfsplit-naming` / `amfsplit gate0` on the Rust toolchain before marking Gate 0 passed |
+| `name`: production user-facing VT, SH and LSU naming workflow | Next; depends on Gate 0 and reference-search input wiring |
 | `db`: references built from the user's downloads, checked by checksum | To do |
 
 ## Build and run
@@ -36,6 +37,8 @@ target/release/amfsplit triage --hits out/sample.LSU_LROR-FLR2.vs_v18.hits.tsv -
     --records out/sample.records.tsv --fasta-prefix out/sample \
     --amf-reference V18_LSUDB_052025_AMFONLY.fasta --min-id 90      # 85 for ONT R9.4.1
 cargo test --release
+# Run the frozen naming reproducibility gate (requires parity/naming fixtures)
+cargo run --release -- gate0
 ```
 
 `-a` takes ITSxRust's `--anchors-tsv` for the same reads (ITSxRust 0.3.0, as in the paper). Options
@@ -52,9 +55,10 @@ and outputs are those of amfsplit.py v0.3.1:
 |---|---|
 | `crates/amfsplit` | The command-line tool |
 | `crates/amfsplit-regions` | Stage 1: anchors, primer windows, concatemer screen |
+| `crates/amfsplit-naming` | Frozen VT/SH/LSU culture-bridge and novelty logic plus the Gate 0 parity harness |
 | `crates/amfsplit-edlib` | FFI to edlib, vendored from Python edlib 1.3.9.post1 so alignments equal the prototype's |
 | `panels/` | The legacy primer-window panel used in the paper |
-| `parity/stage1/`, `parity/triage/` | Golden outputs of the prototypes, and the parity checks |
+| `parity/stage1/`, `parity/triage/`, `parity/naming/` | Golden outputs of the prototypes, frozen evidence and per-copy naming parity checks |
 
 ## Licence
 

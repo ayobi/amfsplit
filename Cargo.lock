@@ -21,6 +21,7 @@ dependencies = [
 name = "amfsplit"
 version = "0.1.0-dev"
 dependencies = [
+ "amfsplit-naming",
  "amfsplit-regions",
  "anyhow",
  "clap",
@@ -34,6 +35,18 @@ name = "amfsplit-edlib"
 version = "0.1.0-dev"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "amfsplit-naming"
+version = "0.1.0-dev"
+dependencies = [
+ "amfsplit-edlib",
+ "amfsplit-regions",
+ "anyhow",
+ "flate2",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

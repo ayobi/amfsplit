@@ -1,0 +1,16 @@
+[package]
+name = "amfsplit-naming"
+description = "Frozen VT/SH/LSU culture-bridge and novelty rules for AMF long reads"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+amfsplit-edlib = { path = "../amfsplit-edlib" }
+amfsplit-regions = { path = "../amfsplit-regions" }
+anyhow = "1"
+flate2 = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"

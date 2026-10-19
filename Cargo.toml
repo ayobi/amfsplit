@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/amfsplit-edlib", "crates/amfsplit-regions", "crates/amfsplit"]
+members = ["crates/amfsplit-edlib", "crates/amfsplit-regions", "crates/amfsplit-naming", "crates/amfsplit"]
 
 [workspace.package]
 version = "0.1.0-dev"

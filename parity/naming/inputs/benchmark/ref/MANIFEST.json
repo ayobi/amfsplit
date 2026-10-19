@@ -1,0 +1,446 @@
+{
+ "name": "culture_ref",
+ "version": "v4",
+ "created": "2026-09-28T16:45:31-03:00",
+ "source": "Stefani et al. (2025) rDNA copies, GenBank PX207096-PX207274 and PX214440-PX215164",
+ "fingerprint": "181938d695f3df40",
+ "script": {
+  "file": "freeze_ref.py",
+  "sha256": "33624cfd4ebd7758ef06e14506fc2db30c4020d17992c8b99875a0cc50e3d5fd"
+ },
+ "inputs": {
+  "groups": {
+   "path": "../bench/stefani/stefani_groups.tsv",
+   "sha256": "2e9c42017a83c2b06928aa9657562014c0a3a6d6739887b495a76ca877f5c9f2",
+   "bytes": 134943
+  },
+  "flags": {
+   "path": "../bench/stefani/stefani_qc.flags.tsv",
+   "sha256": "5509544debb9064c96ad3f98d61962fda578e9bd8c639989c7bb43975fb92cec",
+   "bytes": 3556
+  },
+  "vt": {
+   "path": "../bench/stefani/vt_check.copies.tsv",
+   "sha256": "b0f741feea60e1646365491de298477ed4b3e1c1a6d376c9326542e1ea678188",
+   "bytes": 137574
+  },
+  "records": {
+   "path": "../bench/stefani/out/windows/stefani.records.tsv",
+   "sha256": "402ab8d5dc06d809caae817aa9434fa34acaf32d1792af1afe696dac970fee46",
+   "bytes": 228516
+  },
+  "fasta": {
+   "path": "../bench/stefani/stefani_rdna.fasta",
+   "sha256": "f73259cd6dc8dc7a7ad93df0d635480ddc68a3f5f8c94a5a5a3d6857c80037e8",
+   "bytes": 2775479
+  },
+  "edits": {
+   "path": "ref_edits_v4.tsv",
+   "sha256": "ef159f07be8974b3f75e2a0b512c54613fd2813e868c789550c21cd32b1301df",
+   "bytes": 5920
+  }
+ },
+ "edits": [
+  {
+   "action": "drop",
+   "target": "PX215117.1",
+   "value": "",
+   "expect": "organism=Gigaspora rosea",
+   "reason": "SSU flank 4-6% and ITS 5.6-7.6% from the other G. rosea copies: SSU and ITS diverge at the same rate, so sequencing error or pseudogene (vt_followup check 3)",
+   "copies": [
+    "PX215117.1"
+   ],
+   "cultures_before": [
+    "Gigaspora rosea | CU131_1018C"
+   ],
+   "cultures_after": [
+    "Gigaspora rosea | CU131_1018C"
+   ]
+  },
+  {
+   "action": "name_culture",
+   "target": "4375_IVT88A",
+   "value": "Rhizophagus irregularis",
+   "expect": "n=10;groups=2;vt=VTX00114",
+   "reason": "one culture filed under two names (R. irregularis x6, [Rhizoglomus] vesiculiferum x4), all VTX00114; majority name; v1 name check: ITS1 0.5 vs 3.7%, ITS2 1.0 vs 6.2%, LROR-FLR2 0.0 vs 3.0% (R. irregularis vs vesiculiferum)",
+   "copies": [
+    "PX214777.1",
+    "PX214782.1",
+    "PX214786.1",
+    "PX214787.1",
+    "PX214799.1",
+    "PX214800.1",
+    "PX214801.1",
+    "PX214802.1",
+    "PX214807.1",
+    "PX214810.1"
+   ],
+   "cultures_before": [
+    "Rhizophagus irregularis | 4375_IVT88A",
+    "[Rhizoglomus] vesiculiferum | 4375_IVT88A"
+   ],
+   "cultures_after": [
+    "Rhizophagus irregularis | 4375_IVT88A"
+   ]
+  },
+  {
+   "action": "name_culture",
+   "target": "ON205A",
+   "value": "Ambispora leptoticha",
+   "expect": "n=9;groups=2;vt=VTX00242",
+   "reason": "one culture filed under two names (Ambispora sp. x6, A. leptoticha x3), all VTX00242",
+   "copies": [
+    "PX207101.1",
+    "PX207102.1",
+    "PX207103.1",
+    "PX207104.1",
+    "PX207105.1",
+    "PX207106.1",
+    "PX215139.1",
+    "PX215140.1",
+    "PX215141.1"
+   ],
+   "cultures_before": [
+    "Ambispora leptoticha | ON205A",
+    "Ambispora sp. | ON205A"
+   ],
+   "cultures_after": [
+    "Ambispora leptoticha | ON205A"
+   ]
+  },
+  {
+   "action": "name_culture",
+   "target": "SO43BL",
+   "value": "Septoglomus africanum",
+   "expect": "organism=Septoglomus sp.;n=6",
+   "reason": "main type in UNITE SH1222889.10FU 'Septoglomus africanum' (98.6-99.0%) and 99.6-99.9% to V18 S. africanum (margin 1.2 points)",
+   "copies": [
+    "PX214608.1",
+    "PX214610.1",
+    "PX214611.1",
+    "PX214612.1",
+    "PX214613.1",
+    "PX214614.1"
+   ],
+   "cultures_before": [
+    "Septoglomus sp. | SO43BL"
+   ],
+   "cultures_after": [
+    "Septoglomus africanum | SO43BL"
+   ]
+  },
+  {
+   "action": "relabel",
+   "target": "PX215162.1",
+   "value": "Paraglomus sp.",
+   "expect": "organism=Paraglomus brasilianum;label=BR105_2435A;vt=VTX00281",
+   "reason": "second, laccatum-like Paraglomus in mixed culture BR105_2435A: 28-33% from P. brasilianum in ITS, 5-9% from the P. laccatum cultures (vt_followup check 1)",
+   "copies": [
+    "PX215162.1"
+   ],
+   "cultures_before": [
+    "Paraglomus brasilianum | BR105_2435A"
+   ],
+   "cultures_after": [
+    "Paraglomus sp. | BR105_2435A"
+   ]
+  },
+  {
+   "action": "relabel",
+   "target": "PX215163.1",
+   "value": "Paraglomus sp.",
+   "expect": "organism=Paraglomus brasilianum;label=BR105_2435A;vt=VTX00281",
+   "reason": "as PX215162.1",
+   "copies": [
+    "PX215163.1"
+   ],
+   "cultures_before": [
+    "Paraglomus brasilianum | BR105_2435A"
+   ],
+   "cultures_after": [
+    "Paraglomus sp. | BR105_2435A"
+   ]
+  },
+  {
+   "action": "relabel",
+   "target": "PX215164.1",
+   "value": "Paraglomus sp.",
+   "expect": "organism=Paraglomus brasilianum;label=BR105_2435A;vt=VTX00281",
+   "reason": "as PX215162.1",
+   "copies": [
+    "PX215164.1"
+   ],
+   "cultures_before": [
+    "Paraglomus brasilianum | BR105_2435A"
+   ],
+   "cultures_after": [
+    "Paraglomus sp. | BR105_2435A"
+   ]
+  },
+  {
+   "action": "relabel",
+   "target": "PX214608.1",
+   "value": "Septoglomus sp.",
+   "expect": "organism=Septoglomus africanum;label=SO43BL;class=divergent",
+   "reason": "second lineage in SO43BL: Blasz_17_2277A's main type (SSU 0.0%, ITS1 0.0%, LROR-FLR2 0.3%), 11-12% from SO43BL's main type in ITS",
+   "copies": [
+    "PX214608.1"
+   ],
+   "cultures_before": [
+    "Septoglomus africanum | SO43BL"
+   ],
+   "cultures_after": [
+    "Septoglomus sp. | SO43BL"
+   ]
+  },
+  {
+   "action": "relabel",
+   "target": "PX214609.1",
+   "value": "Septoglomus africanum",
+   "expect": "organism=Septoglomus sp.;label=Blasz_17_2277A;class=divergent",
+   "reason": "second lineage in Blasz_17_2277A: SO43BL's main type (SSU 0.0%, ITS1 2.7%, LROR-FLR2 0.4%), 11% from Blasz_17_2277A's main type in ITS",
+   "copies": [
+    "PX214609.1"
+   ],
+   "cultures_before": [
+    "Septoglomus sp. | Blasz_17_2277A"
+   ],
+   "cultures_after": [
+    "Septoglomus africanum | Blasz_17_2277A"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX207190.1,PX207191.1,PX207192.1,PX207193.1",
+   "value": "divergent",
+   "expect": "organism=Rhizophagus prolifer;label=SD5_IVT32;class=main;s58=152;n=4",
+   "reason": "5.8S 152 bp, the divergent-class signature (157-158 bp in the rest of the culture); the stefani_qc culture medoid fell in this 4-copy group, so the flags came out inverted. LSU 91.8% from anything in V18",
+   "copies": [
+    "PX207190.1",
+    "PX207191.1",
+    "PX207192.1",
+    "PX207193.1"
+   ],
+   "cultures_before": [
+    "Rhizophagus prolifer | SD5_IVT32"
+   ],
+   "cultures_after": [
+    "Rhizophagus prolifer | SD5_IVT32"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX207206.1,PX207207.1,PX207208.1,PX207209.1,PX207210.1,PX207211.1",
+   "value": "main",
+   "expect": "organism=Rhizophagus prolifer;label=SD5_IVT32;class=divergent;s58=157-158;n=6",
+   "reason": "5.8S 157-158 bp (main type), flagged divergent_5.8S only because the medoid fell in the other group; LSU matches V18 Rhizophagus proliferus at 98.5-99.9%",
+   "copies": [
+    "PX207206.1",
+    "PX207207.1",
+    "PX207208.1",
+    "PX207209.1",
+    "PX207210.1",
+    "PX207211.1"
+   ],
+   "cultures_before": [
+    "Rhizophagus prolifer | SD5_IVT32"
+   ],
+   "cultures_after": [
+    "Rhizophagus prolifer | SD5_IVT32"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX214843.1,PX214849.1,PX214850.1,PX214851.1,PX214852.1,PX214853.1",
+   "value": "divergent",
+   "expect": "organism=[Rhizoglomus] vesiculiferum;label=212939_IVT38A;class=main;s58=151-152;n=6",
+   "reason": "5.8S 151-152 bp, the divergent-class signature; 6 of the culture's 7 copies, so the stefani_qc medoid fell among them and the flags came out inverted. LSU 94.0-96.2% to V18 R. vesiculiferus",
+   "copies": [
+    "PX214843.1",
+    "PX214849.1",
+    "PX214850.1",
+    "PX214851.1",
+    "PX214852.1",
+    "PX214853.1"
+   ],
+   "cultures_before": [
+    "[Rhizoglomus] vesiculiferum | 212939_IVT38A"
+   ],
+   "cultures_after": [
+    "[Rhizoglomus] vesiculiferum | 212939_IVT38A"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX214839.1",
+   "value": "main",
+   "expect": "organism=[Rhizoglomus] vesiculiferum;label=212939_IVT38A;class=divergent;s58=157;n=1",
+   "reason": "5.8S 157 bp (main type), flagged divergent_5.8S only because the medoid fell in the short-5.8S group; LSU 96.5% to V18 R. vesiculiferus",
+   "copies": [
+    "PX214839.1"
+   ],
+   "cultures_before": [
+    "[Rhizoglomus] vesiculiferum | 212939_IVT38A"
+   ],
+   "cultures_after": [
+    "[Rhizoglomus] vesiculiferum | 212939_IVT38A"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX214608.1",
+   "value": "main",
+   "expect": "label=SO43BL;class=divergent",
+   "reason": "sole copy of its lineage in SO43BL, so its main type",
+   "copies": [
+    "PX214608.1"
+   ],
+   "cultures_before": [
+    "Septoglomus sp. | SO43BL"
+   ],
+   "cultures_after": [
+    "Septoglomus sp. | SO43BL"
+   ]
+  },
+  {
+   "action": "copy_class",
+   "target": "PX214609.1",
+   "value": "main",
+   "expect": "label=Blasz_17_2277A;class=divergent",
+   "reason": "sole copy of its lineage in Blasz_17_2277A, so its main type",
+   "copies": [
+    "PX214609.1"
+   ],
+   "cultures_before": [
+    "Septoglomus africanum | Blasz_17_2277A"
+   ],
+   "cultures_after": [
+    "Septoglomus africanum | Blasz_17_2277A"
+   ]
+  }
+ ],
+ "name_check_suggestions": {},
+ "shared_labels": {
+  "Blasz_17_2277A": [
+   "Septoglomus africanum",
+   "Septoglomus sp."
+  ],
+  "SO43BL": [
+   "Septoglomus africanum",
+   "Septoglomus sp."
+  ],
+  "BR105_2435A": [
+   "Paraglomus brasilianum",
+   "Paraglomus sp."
+  ]
+ },
+ "copy_class_check": {
+  "inverted": [],
+  "same_length": [
+   {
+    "culture": "Gigaspora rosea | 4292_708F",
+    "main": [
+     158,
+     158,
+     158,
+     158,
+     158,
+     158,
+     158,
+     158,
+     158
+    ],
+    "divergent": [
+     158,
+     158,
+     158
+    ]
+   },
+   {
+    "culture": "Septoglomus sp. | 4404_2057A",
+    "main": [
+     158,
+     158
+    ],
+    "divergent": [
+     158
+    ]
+   },
+   {
+    "culture": "Septoglomus sp. | FS_9_2328B",
+    "main": [
+     158,
+     158,
+     158
+    ],
+    "divergent": [
+     158,
+     158
+    ]
+   },
+   {
+    "culture": "Septoglomus turnauae | Blasz_12_2272D",
+    "main": [
+     159,
+     159,
+     159,
+     159
+    ],
+    "divergent": [
+     158
+    ]
+   }
+  ],
+  "div_kinds": {
+   "same_length": 8,
+   "short_5.8S": 43
+  }
+ },
+ "counts": {
+  "copies_in": 904,
+  "retained": 903,
+  "excluded": 1,
+  "relabelled": 19,
+  "divergent_class": 51,
+  "outlier_class": 0,
+  "cultures": 151,
+  "named_species": 37,
+  "cultures_on_name_hold": [],
+  "by_order": {
+   "Archaeosporales": {
+    "cultures": 5,
+    "copies": 30
+   },
+   "Diversisporales": {
+    "cultures": 42,
+    "copies": 245
+   },
+   "Glomerales": {
+    "cultures": 95,
+    "copies": 600
+   },
+   "Paraglomerales": {
+    "cultures": 9,
+    "copies": 28
+   }
+  }
+ },
+ "outputs": {
+  "copies.tsv": "181938d695f3df406c9da0af5e95f51b726b6931b71fd7217c430a085df65e94",
+  "cultures.tsv": "77a23fb8ddc821f01b13d0196319ebdc113d9a8a888a1c813856acbb9e719a16",
+  "groups.tsv": "24d6f667217f3400c2fc06f2c921ab388a3116f976f1b1ba23b9ce7a3a2b5556",
+  "fasta/LSU_D2_FLR3-FLR4.fasta": "1b860c9b99a1b82f47b7c27034868ae2bdbb3549314956b467d10e59efd74d61",
+  "fasta/LSU_LROR-FLR2.fasta": "18679043a974d1bff4fdf798c0f74655d7444e1b0916a5c0c8356c796a9cca2f",
+  "fasta/SSU_NS31-AML2.fasta": "9680e85507a18272994093402b01254988d7a5fef46d87c784a8e8fdcfd50427",
+  "fasta/SSU_V4_AMV4.5NF-AMDGR.fasta": "44bb797b3e85a6e540ff6a98d65efe4f899a24194102ab64ec2d3d0da9a9edb3",
+  "fasta/SSU_V4_WANDA-AML2.fasta": "5a06d09520e6b8acb9885f3b4920262f13dd6d5e5e32339d7db9ff39969f8efc",
+  "fasta/SSU_VT_NS31-AM1.fasta": "f322678742ad1cfb782cded31c3b1a3855f0d5bbad4fefdce09b264e4967a5b5",
+  "fasta/full.fasta": "db4e8c2f890daab6e4efc29aa006c39ce354e2b434823c85190303fea87ad044",
+  "fasta/full_its.fasta": "97354e34a22f1ceb27f54b63bd60b3ee342c74c4e27983fdc4499bcc6891916a",
+  "fasta/its1.fasta": "b1abd6a89515f275d25414763704a1201e83a8e663d304402ff3078d89050003",
+  "fasta/its2.fasta": "7d199b4218c3998b93dde91eb6e5af9dc6b02b93c36afaf854138310ce32bb63",
+  "fasta/lsu_flank.fasta": "873b01463e7036ad6549ae0f9404152785e040cff5a7b3a4763d6d8fa5a93af6",
+  "fasta/s58.fasta": "0b6bb14ff614ff4c68e7d2db686023164676c86d04f1346ef89b4c2dfbdb991d",
+  "fasta/ssu_flank.fasta": "9f98d74e0364de14d07ecffbacb310c5fa3143e6b16bf055c061d4db70cee70a"
+ }
+}

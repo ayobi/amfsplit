@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 amfsplit-regions = { path = "../amfsplit-regions" }
+amfsplit-naming = { path = "../amfsplit-naming" }
 anyhow = "1"
 clap = { version = "4.5", features = ["derive", "env"] }
 sha2 = "0.10"

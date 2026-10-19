@@ -36,6 +36,8 @@ enum Command {
     /// Call each read AMF, unresolved, non_AMF, no_hit or no_window from its best hit, and write
     /// AMF-only copies of the Stage 1 FASTAs (triage.py v0.3.1).
     Triage(TriageArgs),
+    /// Run the frozen M2b naming reproducibility gate (both holdouts, per-copy golden parity).
+    Gate0(Gate0Args),
 }
 
 #[derive(Args)]
@@ -93,6 +95,13 @@ struct TriageArgs {
     /// Include unresolved reads in the AMF subsets
     #[arg(long)]
     keep_unresolved: bool,
+}
+
+#[derive(Args)]
+struct Gate0Args {
+    /// Frozen naming parity fixture directory (defaults to this checkout's parity/naming).
+    #[arg(long)]
+    fixtures: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -280,6 +289,18 @@ fn triage_cmd(a: TriageArgs) -> Result<()> {
     Ok(())
 }
 
+fn gate0_cmd(a: Gate0Args) -> Result<()> {
+    let fixtures = a.fixtures.unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming")
+    });
+    let report = amfsplit_naming::run_gate0(&fixtures)?;
+    print!("{}", report.summary());
+    if !report.passed() {
+        anyhow::bail!("frozen naming reproducibility gate failed");
+    }
+    Ok(())
+}
+
 fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let cli = Cli::parse();
@@ -287,6 +308,7 @@ fn main() -> std::process::ExitCode {
         Command::Regions(a) => regions(a, &argv),
         Command::Validate(a) => validate_cmd(a),
         Command::Triage(a) => triage_cmd(a),
+        Command::Gate0(a) => gate0_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

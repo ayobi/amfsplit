@@ -1,0 +1,66 @@
+{
+ "culture_ref": {
+  "path": "/home/csb/Downloads/AMF_test/ref/culture_ref/v4",
+  "version": "v4",
+  "fingerprint": "de87e5fe9dbc0bb4"
+ },
+ "arms": {
+  "VT": {
+   "path": "/home/csb/Downloads/AMF_test/ref/maarjam/maarjam.fasta",
+   "sha256": "2b2c57e664e763473a23c8eba12de07d448cff5b45b1fb75794ca5701930969a",
+   "records": 3081,
+   "kept": 3081,
+   "units": 384,
+   "query": "ssu_flank",
+   "task": "megablast",
+   "min_id": 97.0,
+   "min_cov": 0.95
+  },
+  "SH": {
+   "path": "/home/csb/Downloads/AMF_test/ref/unite/UNITE_public_19.02.2025.fasta.gz",
+   "sha256": "abe98f43e16c179f2c129f137989cad48e6855ce4be9ae0f365defd1f856369b",
+   "records": 2069189,
+   "kept": 16800,
+   "units": 7563,
+   "query": "full_its",
+   "task": "blastn",
+   "min_id": 98.5,
+   "min_cov": 0.9
+  },
+  "LSU": {
+   "path": "/home/csb/Downloads/AMF_test/ref/delavaux/repo/2024_AMFPipeline/2024_AMFPipeline_ASV/V18_LSUDB_052025_AMFONLY.fasta",
+   "sha256": "e6794cbbe166735a94e44b146aae2ecffb35ebfee61cf6ae8ed2e48ba9227198",
+   "records": 460,
+   "kept": 460,
+   "units": 234,
+   "query": "LSU_LROR-FLR2",
+   "task": "blastn",
+   "min_id": 97.0,
+   "min_cov": 0.9
+  }
+ },
+ "max_evalue": 1e-50,
+ "refset_hits": "dropped",
+ "script_sha256": "f993307aab75fb98451aa696d29f4cf0e0571c5ffb9aca23a13d893bf141238f",
+ "args": {
+  "ref": "../ref/culture_ref/v4",
+  "maarjam": "../ref/maarjam/maarjam.fasta",
+  "unite": "../ref/unite/UNITE_public_19.02.2025.fasta.gz",
+  "unite_keep": "Glomeromycota",
+  "lsu": "../ref/delavaux/repo/2024_AMFPipeline/2024_AMFPipeline_ASV/V18_LSUDB_052025_AMFONLY.fasta",
+  "threads": 8,
+  "max_evalue": 1e-50,
+  "vt_min_id": 97.0,
+  "vt_min_cov": 0.95,
+  "vt_task": "megablast",
+  "sh_min_id": 98.5,
+  "sh_min_cov": 0.9,
+  "sh_task": "blastn",
+  "lsu_min_id": 97.0,
+  "lsu_min_cov": 0.9,
+  "lsu_task": "blastn",
+  "out": "../bench/stefani/crosswalk_v4",
+  "keep_refset_hits": false,
+  "keep_db": false
+ }
+}

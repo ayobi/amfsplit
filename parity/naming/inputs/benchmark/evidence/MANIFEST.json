@@ -1,0 +1,21 @@
+{
+  "schema": "amf_phase4_evidence_bundle_v1",
+  "reference_fingerprint": "181938d695f3df40",
+  "files": [
+    {
+      "path": "VT.evidence.json.gz",
+      "bytes": 402365,
+      "sha256": "5bcd06453d32f8718f573368009b12d19b55c58c2712e439408d26e1a9217f56"
+    },
+    {
+      "path": "SH.evidence.json.gz",
+      "bytes": 1500239,
+      "sha256": "de21b3fa16fe8df6ca43421260acfd912391ef513e6bf5ead86853be4b9e81f6"
+    },
+    {
+      "path": "LSU.evidence.json.gz",
+      "bytes": 276076,
+      "sha256": "1a259082f41ef44cdfca2d02b64dc7ef17c34473b693db56a292f5d35ecc9c4b"
+    }
+  ]
+}
