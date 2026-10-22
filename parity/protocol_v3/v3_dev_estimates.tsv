@@ -1,0 +1,20 @@
+rule	data	outcome	frozen	with_rule	note
+R2	EUKARYOME, absent taxa	false known	13/2706	1/2706	EUK1266127
+R2	EUKARYOME, known species	kept	152/199	149/199	
+R2	EUKARYOME, genus-only reads	known calls outside called species	593 calls	113 demoted	species unknown; descriptive
+R1a	EUKARYOME, absent taxa	false known	13	3	10 inside only an unnamed culture -> U1; with R2: 1
+R1a	EUKARYOME, absent lineages inside unnamed cultures	calls	42	9 -> U1	divergent class 33; novel species, genus known 8; boundary 1
+R5	EUKARYOME motif carriers (VT only)	Rhizoglomus called divergent; others reclassified	46/95	66/95; 1/438	Nanoglomus 1
+R5	EUKARYOME motif carriers (VT or SSU fallback 2.108%)	Rhizoglomus called divergent; others reclassified	46/95	93/95; 1/438	Nanoglomus 1
+R6	EUKARYOME new-lineage calls, --min-id 85	dropped by filtering triage	0/1259	79/1259	known and absent-species reads below the cut: 0
+R6	EUKARYOME new-lineage calls, --min-id 88	dropped by filtering triage	0/1259	607/1259	known and absent-species reads below the cut: 0
+R6	EUKARYOME new-lineage calls, --min-id 90	dropped by filtering triage	0/1259	787/1259	known and absent-species reads below the cut: 0
+R6	EUKARYOME new-lineage calls, --min-id 92	dropped by filtering triage	0/1259	907/1259	known and absent-species reads below the cut: 0
+R3b	EUKARYOME, absent genera given a genus	flagged	no flag	181/268	cut 0.07488 from 803 copies
+R3b	EUKARYOME, absent species, right genus	false flags	no flag	1/49	
+R3b	EUKARYOME, known species kept	false flags	no flag	0/152	
+R2	LongGloDB, absent taxa	false known	4/102	4/102	
+R2	LongGloDB, known species	kept	136/164	135/164	Funneliformis mosseae BEG12
+R2	v4, LSU removal, V18 removed	false known	53/673	48/673	
+R2	v4, LSU removal, V18 intact	false known	9/673	9/673	
+R2	v4, species withheld, V18 intact (no N6)	false known	71/803	18/803	N6 alone leaves 18/803
