@@ -36,7 +36,8 @@ enum Command {
     /// Call each read AMF, unresolved, non_AMF, no_hit or no_window from its best hit, and write
     /// AMF-only copies of the Stage 1 FASTAs (triage.py v0.3.1).
     Triage(TriageArgs),
-    /// Run the frozen M2b naming reproducibility gate (both holdouts, per-copy golden parity).
+    /// Run the frozen M2b naming reproducibility gate (both holdouts, per-copy golden parity):
+    /// Gate 0a, the nearest-reference LSU arm, and Gate 0b step 1, the LSU species-clade arm.
     Gate0(Gate0Args),
 }
 
@@ -102,6 +103,9 @@ struct Gate0Args {
     /// Frozen naming parity fixture directory (defaults to this checkout's parity/naming).
     #[arg(long)]
     fixtures: Option<PathBuf>,
+    /// Which LSU arm to check: baseline (Gate 0a), species-clades (Gate 0b step 1) or all.
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "all"])]
+    policy: String,
 }
 
 #[derive(Args)]
@@ -293,9 +297,18 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
     let fixtures = a.fixtures.unwrap_or_else(|| {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming")
     });
-    let report = amfsplit_naming::run_gate0(&fixtures)?;
-    print!("{}", report.summary());
-    if !report.passed() {
+    let mut passed = true;
+    if matches!(a.policy.as_str(), "baseline" | "all") {
+        let report = amfsplit_naming::run_gate0(&fixtures)?;
+        print!("{}", report.summary());
+        passed &= report.passed();
+    }
+    if matches!(a.policy.as_str(), "species-clades" | "all") {
+        let report = amfsplit_naming::run_gate0b_species_clades(&fixtures)?;
+        print!("{}", report.summary());
+        passed &= report.passed();
+    }
+    if !passed {
         anyhow::bail!("frozen naming reproducibility gate failed");
     }
     Ok(())

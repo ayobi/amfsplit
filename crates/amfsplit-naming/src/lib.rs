@@ -655,6 +655,37 @@ impl Trainer {
     }
 }
 
+/// Per-copy LSU placement units for the species-clade policy of the frozen compare_holdouts.py:
+/// the copy's `credible_species_clade_units` when its LR0R-FLR2 window was eligible for the bridge
+/// alignment, otherwise none.
+fn species_clade_sets(data: &FrozenData, placements: &BTreeMap<String, Row>) -> Result<BTreeMap<String, StringSet>> {
+    let mut out = BTreeMap::new();
+    for x in data.copies.keys() {
+        let p = placements.get(x).ok_or_else(|| anyhow!("missing placement annotation for {x}"))?;
+        let units: StringSet = if row_value(p, "bridge_alignment_eligible")? == "1" {
+            row_value(p, "credible_species_clade_units")?.split(',').filter(|u| !u.is_empty()).map(str::to_owned).collect()
+        } else { StringSet::new() };
+        out.insert(x.clone(), units);
+    }
+    Ok(out)
+}
+
+/// LSU arm built from placement units (`placement_fit`, frozen compare_holdouts.py lines 24-31):
+/// no merges or margins; a training culture holds the units its main-type copies share or, when
+/// they share none, every unit any of them has. Anchors are empty, as in the frozen code.
+fn placement_fit(data: &FrozenData, training: &StringSet, psets: &BTreeMap<String, StringSet>) -> Fit {
+    let mut holders: BTreeMap<String, StringSet> = BTreeMap::new();
+    for c in training {
+        let per_copy: Vec<StringSet> = data.by_culture.get(c).into_iter().flatten()
+            .filter(|x| data.copies.get(*x).is_some_and(|m| m.copy_class == "main"))
+            .filter_map(|x| psets.get(x)).filter(|u| !u.is_empty()).cloned().collect();
+        let shared = set_intersection(&per_copy);
+        let units: StringSet = if !shared.is_empty() { shared } else { per_copy.iter().flat_map(|u| u.iter().cloned()).collect() };
+        for u in units { holders.entry(u).or_default().insert(c.clone()); }
+    }
+    Fit { sets: psets.clone(), holders, anchors: BTreeMap::new(), best: data.best.get("LSU").cloned().unwrap_or_default() }
+}
+
 fn reconcile(data: &FrozenData, x: &str, fits: &BTreeMap<String, Fit>, drop: &StringSet) -> Result<Row> {
     let meta=data.copies.get(x).ok_or_else(|| anyhow!("unknown accession {x}"))?;
     let c=&meta.culture;
@@ -915,6 +946,7 @@ pub struct ModeReport {
 
 #[derive(Clone, Debug)]
 pub struct Gate0Report {
+    pub policy: String,
     pub reference_fingerprint: String,
     pub evidence_hashes: BTreeMap<String,String>,
     pub modes: Vec<ModeReport>,
@@ -923,12 +955,17 @@ pub struct Gate0Report {
 impl Gate0Report {
     pub fn passed(&self) -> bool { self.modes.iter().all(|m|m.byte_identical && m.differing_cells==0) }
     pub fn summary(&self) -> String {
-        let mut s=format!("reference fingerprint {}\n",self.reference_fingerprint);
+        let mut s=format!("policy {}; reference fingerprint {}\n",self.policy,self.reference_fingerprint);
         for m in &self.modes {
             s.push_str(&format!("{}: {} holdout rounds; {}/903 rows; byte-identical={}; generated SHA-256 {}; differing cells={}\n",m.mode,m.folds,m.rows,m.byte_identical,m.sha256,m.differing_cells));
             for d in &m.first_differences { s.push_str("  "); s.push_str(d); s.push('\n'); }
         }
-        s.push_str(if self.passed(){"GATE 0: PASS (exact archived per-copy output parity)\n"}else{"GATE 0: FAIL (see per-copy differences above)\n"});
+        let gate = match self.policy.as_str() {
+            "baseline" => "GATE 0a, nearest-reference LSU arm",
+            "epa_species_clades" => "GATE 0b, LSU species-clade arm",
+            _ => "GATE 0",
+        };
+        s.push_str(&if self.passed(){format!("{gate}: PASS (exact archived per-copy output parity)\n")}else{format!("{gate}: FAIL (see per-copy differences above)\n")});
         s
     }
 }
@@ -936,7 +973,17 @@ impl Gate0Report {
 /// Execute both frozen culture-only holdouts against the saved M2b assignment tables.
 /// `fixture_dir` is `parity/naming`; its inputs are checksum-pinned and exclude external raw reads.
 pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
-    let fixture_dir=fixture_dir.as_ref();
+    run_policy(fixture_dir.as_ref(), "baseline")
+}
+
+/// Gate 0b, step 1: the same holdouts with the LSU arm built from placement species-clade units,
+/// against the archived `epa_species_clades_*` tables of the frozen M2b comparison.
+pub fn run_gate0b_species_clades(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
+    run_policy(fixture_dir.as_ref(), "epa_species_clades")
+}
+
+fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
+    if !matches!(policy, "baseline" | "epa_species_clades") { bail!("unknown naming policy {policy}"); }
     let input_dir=fixture_dir.join("inputs/benchmark");
     let data=FrozenData::load(&input_dir)?;
     let trainers:BTreeMap<String,Trainer>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),Trainer::new(&data,arm)?))).collect::<Result<_>>()?;
@@ -948,6 +995,7 @@ pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
     let placement_table=read_table(&placement_path)?;
     let placements=read_row_map(&placement_table);
     if placements.len()!=data.copies.len() || placements.keys().any(|x|!data.copies.contains_key(x)) { bail!("LSU placement IDs differ from the 903-copy culture reference"); }
+    let psets = if policy == "epa_species_clades" { Some(species_clade_sets(&data, &placements)?) } else { None };
     let mut modes=Vec::new();
     for mode in ["physical_culture","physical_species"] {
         let mut results=Vec::with_capacity(data.copies.len());
@@ -955,7 +1003,8 @@ pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
         let fold_count=folds.len();
         for (drop,query_ids) in &folds {
             let training:StringSet=data.cultures.keys().filter(|c|!drop.contains(*c)).cloned().collect();
-            let fits:BTreeMap<String,Fit>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),trainers[*arm].fit(&data,&training)?))).collect::<Result<_>>()?;
+            let mut fits:BTreeMap<String,Fit>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),trainers[*arm].fit(&data,&training)?))).collect::<Result<_>>()?;
+            if let Some(ps)=&psets { fits.insert("LSU".into(),placement_fit(&data,&training,ps)); }
             if fits["LSU"].holders.values().any(|h|h.iter().any(|c|drop.contains(c))) { bail!("held-out culture leaked into LSU training holders in {mode}"); }
             let mut reconciliation=BTreeMap::new();
             for x in query_ids { reconciliation.insert(x.clone(),reconcile(&data,x,&fits,drop)?); }
@@ -964,7 +1013,7 @@ pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
                 let x=row_value(&novelty,"accession")?.to_owned();
                 let mut row=reconciliation.get(&x).cloned().ok_or_else(||anyhow!("missing reconciliation for {x}"))?;
                 row.extend(novelty);
-                row.insert("policy".into(),"baseline".into());
+                row.insert("policy".into(),policy.into());
                 row.insert("mode".into(),mode.into());
                 row.insert("held_cultures".into(),join_set(drop,";"));
                 let p=placements.get(&x).ok_or_else(||anyhow!("missing placement annotation for {x}"))?;
@@ -976,11 +1025,13 @@ pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
         }
         results.sort_by(|a,b|a.get("accession").cmp(&b.get("accession")));
         if results.len()!=data.copies.len() { bail!("{mode} produced {} per-copy results, expected {}",results.len(),data.copies.len()); }
-        let expected_path=fixture_dir.join("golden").join(format!("baseline_{mode}.copies.tsv"));
-        let expected_sha = match mode {
-            "physical_culture" => "6cc5412acf147ba7644d767851872517f78551b372e614c3f07297227d539f34",
-            "physical_species" => "906420d70e9d8d24ab5b115ecd63e72451c396b4f1e7c60cfccf7b8d6a8a0800",
-            _ => unreachable!("gate0 mode is hard-coded above"),
+        let expected_path=fixture_dir.join("golden").join(format!("{policy}_{mode}.copies.tsv"));
+        let expected_sha = match (policy, mode) {
+            ("baseline", "physical_culture") => "6cc5412acf147ba7644d767851872517f78551b372e614c3f07297227d539f34",
+            ("baseline", "physical_species") => "906420d70e9d8d24ab5b115ecd63e72451c396b4f1e7c60cfccf7b8d6a8a0800",
+            ("epa_species_clades", "physical_culture") => "a357b563a5def31932085dabe4697f3b49e0f586d56a6c91acefe8bb1cb7cfd4",
+            ("epa_species_clades", "physical_species") => "9b0d4ba422214a763cbf0c5949f8f7b2b163fdfcd8e2fd5ebf81a55db521a53a",
+            _ => unreachable!("policy and mode are checked above"),
         };
         let actual_golden_sha = sha256_file(&expected_path)?;
         if actual_golden_sha != expected_sha { bail!("golden output hash mismatch for {mode}: {actual_golden_sha}"); }
@@ -1004,7 +1055,7 @@ pub fn run_gate0(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
     }
     let evidence_dir=input_dir.join("evidence");
     let evidence_hashes=["MANIFEST.json","VT.evidence.json.gz","SH.evidence.json.gz","LSU.evidence.json.gz"].iter().map(|n|Ok(((*n).to_owned(),sha256_file(&evidence_dir.join(n))?))).collect::<Result<BTreeMap<_,_>>>()?;
-    Ok(Gate0Report { reference_fingerprint:data.ref_fingerprint,evidence_hashes,modes })
+    Ok(Gate0Report { policy:policy.into(),reference_fingerprint:data.ref_fingerprint,evidence_hashes,modes })
 }
 
 #[cfg(test)]
@@ -1054,6 +1105,12 @@ mod tests {
     #[test]
     fn frozen_m2b_assignment_rows_match_every_golden_cell() {
         let report=run_gate0(fixture()).unwrap_or_else(|e|panic!("loading/running the frozen Gate 0 data failed: {e:#}"));
+        assert!(report.passed(),"{}",report.summary());
+    }
+
+    #[test]
+    fn frozen_m2b_species_clade_rows_match_every_golden_cell() {
+        let report=run_gate0b_species_clades(fixture()).unwrap_or_else(|e|panic!("loading/running the Gate 0b species-clade data failed: {e:#}"));
         assert!(report.passed(),"{}",report.summary());
     }
 }
