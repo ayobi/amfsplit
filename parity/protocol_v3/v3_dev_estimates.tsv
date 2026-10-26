@@ -18,3 +18,15 @@ R2	LongGloDB, known species	kept	136/164	135/164	Funneliformis mosseae BEG12
 R2	v4, LSU removal, V18 removed	false known	53/673	48/673	
 R2	v4, LSU removal, V18 intact	false known	9/673	9/673	
 R2	v4, species withheld, V18 intact (no N6)	false known	71/803	18/803	N6 alone leaves 18/803
+R7	v4, species withheld, V18 intact (unit level)	genus for F's new-lineage calls	0/365	right 179, wrong 0, abstain 186	R3b flags 0 right, 0 wrong
+R7	v4, LSU removal, V18 removed (label level)	genus for F's new-lineage calls	326/487 genus kept	right 161, wrong 0, abstain 186	R3b flags 0 right (in-sample cut), 0 wrong
+R7	EUKARYOME, novel species, genus in v4	genus for F's new-lineage calls	no genus	right 24	R3b flags 0 right, 0 wrong
+R7	EUKARYOME, novel lineage, genus not in v4	genus for F's new-lineage calls	no genus	wrong 258, abstain 1001	R3b flags 0 right, 212 wrong
+R7	LongGloDB, novel species, genus in v4	genus for F's new-lineage calls	no genus	right 44	R3b flags 3 right, 0 wrong
+R7	LongGloDB, novel lineage, genus not in v4	genus for F's new-lineage calls	no genus	abstain 43	R3b flags 0 right, 0 wrong
+R7	LongGloDB, known species	genus for F's new-lineage calls	no genus	right 2	R3b flags 0 right, 0 wrong
+R8	v4, species clades, physical_culture	new lineage on one unmatched arm	28 new lineage	0 flagged	
+R8	v4, species clades, physical_species	new lineage on one unmatched arm	379 new lineage	0 flagged	
+R8	v4, LSU removal, V18 removed	new lineage on one unmatched arm	360 new lineage	0 flagged	
+R8	EUKARYOME main	new lineage on one unmatched arm	1973 new lineage	76 flagged	novel lineage, genus not in v4 69; genus only 7
+R8	LongGloDB main	new lineage on one unmatched arm	101 new lineage	31 flagged	novel lineage, genus not in v4 15; novel species, genus in v4 8; genus only 8
