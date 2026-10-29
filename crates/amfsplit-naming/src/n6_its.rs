@@ -348,6 +348,291 @@ mod tests {
         assert!(!should_fire(Some(5.1), Some(5.0), "unplaced"));
     }
 
+    fn json_string_array(value: &serde_json::Value, context: &str) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap_or_else(|| panic!("{context}: expected an array"))
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .unwrap_or_else(|| panic!("{context}: expected string values"))
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn assert_optional_float_close(expected: Option<f64>, actual: Option<f64>, context: &str) {
+        match (expected, actual) {
+            (Some(expected), Some(actual)) => assert!(
+                (expected - actual).abs() < 1e-9,
+                "{context}: Python expected {expected:.15}, Rust got {actual:.15}"
+            ),
+            (None, None) => {}
+            (expected, actual) => {
+                panic!("{context}: Python expected {expected:?}, Rust got {actual:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn all_37_species_folds_match_python_reference() {
+        use serde_json::Value;
+        use std::fs;
+
+        let fixture_root = fixture();
+        let parity_dir = fixture_root.join("n6_fold_parity");
+        let manifest_path = parity_dir.join("fold_manifest.json");
+        let reference_path = parity_dir.join("python_reference.json");
+
+        let manifest_bytes = fs::read(&manifest_path).expect("frozen N6 fold manifest should load");
+        let reference_bytes =
+            fs::read(&reference_path).expect("frozen N6 Python reference should load");
+
+        // Lock the fixtures so the expected results cannot change silently.
+        let manifest_sha = super::super::sha256_bytes(&manifest_bytes);
+        let reference_sha = super::super::sha256_bytes(&reference_bytes);
+
+        assert_eq!(
+            manifest_sha, "5d538237a8d0a8ba1446fc586f1f3ab04d91abd44a01669f7475abf6a96978d9",
+            "N6 fold manifest changed; update the lock only after deliberate review"
+        );
+        assert_eq!(
+            reference_sha, "0508049721ed5098ef5ceb594a4b2a67782c92c8c9a614fadd08154632696bbe",
+            "N6 Python reference changed; update the lock only after deliberate review"
+        );
+
+        let manifest: Value =
+            serde_json::from_slice(&manifest_bytes).expect("fold manifest should be valid JSON");
+        let reference: Value = serde_json::from_slice(&reference_bytes)
+            .expect("Python reference should be valid JSON");
+
+        assert_eq!(
+            reference
+                .get("fold_manifest_sha256")
+                .and_then(Value::as_str),
+            Some(manifest_sha.as_str()),
+            "Python reference must identify this exact fold manifest"
+        );
+
+        assert_eq!(manifest["fold_count"].as_u64(), Some(37));
+        assert_eq!(reference["fold_count"].as_u64(), Some(37));
+        assert_eq!(reference["total_query_fold_instances"].as_u64(), Some(850));
+
+        let manifest_folds = manifest["folds"]
+            .as_array()
+            .expect("manifest folds should be an array");
+        let reference_folds = reference["folds"]
+            .as_array()
+            .expect("reference folds should be an array");
+
+        assert_eq!(manifest_folds.len(), 37);
+        assert_eq!(manifest_folds.len(), reference_folds.len());
+
+        let data = FrozenData::load(fixture_root.join("inputs/benchmark"))
+            .expect("frozen benchmark data should load");
+
+        assert_eq!(
+            data.cultures.len(),
+            reference["reference_culture_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            data.copies.len(),
+            reference["reference_accession_count"].as_u64().unwrap() as usize
+        );
+
+        // Build the expensive sequence-distance cache once, then reuse it
+        // across every training fold.
+        let mut rule = ItsRule::new(&data).expect("N6 ITS distance cache should build");
+
+        let mut total_queries = 0usize;
+        let mut missing_all = 0usize;
+        let mut missing_main = 0usize;
+
+        for (manifest_fold, reference_fold) in manifest_folds.iter().zip(reference_folds.iter()) {
+            let target = manifest_fold["target"]
+                .as_str()
+                .expect("fold target should be a string");
+
+            assert_eq!(
+                reference_fold["target"].as_str(),
+                Some(target),
+                "fold target differs between manifest and Python reference"
+            );
+            assert_eq!(
+                manifest_fold["fold_signature_sha256"].as_str(),
+                reference_fold["fold_signature_sha256"].as_str(),
+                "{target}: fold signature mismatch"
+            );
+
+            let held: StringSet = json_string_array(
+                &manifest_fold["held_cultures"],
+                &format!("{target} held cultures"),
+            )
+            .into_iter()
+            .collect();
+
+            let training: StringSet = json_string_array(
+                &manifest_fold["training_cultures"],
+                &format!("{target} training cultures"),
+            )
+            .into_iter()
+            .collect();
+
+            assert!(
+                held.iter()
+                    .all(|culture| data.cultures.contains_key(culture)),
+                "{target}: manifest contains an unknown held-out culture"
+            );
+
+            let expected_training: StringSet = data
+                .cultures
+                .keys()
+                .filter(|culture| !held.contains(*culture))
+                .cloned()
+                .collect();
+
+            assert_eq!(
+                training, expected_training,
+                "{target}: training cultures are not exactly the complement of held cultures"
+            );
+
+            assert_eq!(
+                reference_fold["training_culture_count"].as_u64(),
+                Some(training.len() as u64),
+                "{target}: training-culture count differs"
+            );
+
+            let (threshold_actual, n_actual) = rule
+                .threshold(&data, &training, 99)
+                .unwrap_or_else(|e| panic!("{target}: threshold calculation failed: {e:#}"));
+
+            let threshold_expected = reference_fold["threshold_pct"].as_f64();
+
+            assert_optional_float_close(
+                threshold_expected,
+                threshold_actual,
+                &format!("{target} threshold"),
+            );
+
+            assert_eq!(
+                reference_fold["threshold_n"].as_u64(),
+                Some(n_actual as u64),
+                "{target}: threshold observation count differs"
+            );
+
+            let manifest_queries = json_string_array(
+                &manifest_fold["query_ids"],
+                &format!("{target} query accessions"),
+            );
+
+            let reference_queries = reference_fold["queries"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{target}: reference queries should be an array"));
+
+            assert_eq!(
+                manifest_fold["query_ids"].as_array().unwrap().len(),
+                reference_queries.len(),
+                "{target}: query count differs between fixtures"
+            );
+            assert_eq!(
+                reference_fold["query_count"].as_u64(),
+                Some(reference_queries.len() as u64),
+                "{target}: recorded query count is inconsistent"
+            );
+
+            let reference_accessions: Vec<String> = reference_queries
+                .iter()
+                .map(|query| {
+                    query["accession"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{target}: query accession should be a string"))
+                        .to_owned()
+                })
+                .collect();
+
+            assert_eq!(
+                manifest_queries, reference_accessions,
+                "{target}: query accessions or their order differ"
+            );
+
+            total_queries += reference_queries.len();
+
+            for query in reference_queries {
+                let accession = query["accession"]
+                    .as_str()
+                    .expect("query accession should be a string");
+
+                let copy = data.copies.get(accession).unwrap_or_else(|| {
+                    panic!("{target}: query accession {accession} is absent from Rust reference")
+                });
+
+                let expected_culture = query["culture"]
+                    .as_str()
+                    .expect("query culture should be a string");
+
+                assert_eq!(
+                    copy.culture, expected_culture,
+                    "{target}/{accession}: query culture differs"
+                );
+                assert!(
+                    held.contains(&copy.culture),
+                    "{target}/{accession}: query culture is not held out"
+                );
+
+                let expected_all = query["distance_all_pct"].as_f64();
+                let actual_all = rule
+                    .nearest(&data, accession, &training, Pool::All)
+                    .unwrap_or_else(|e| {
+                        panic!("{target}/{accession}: all-pool calculation failed: {e:#}")
+                    });
+
+                if actual_all.is_none() {
+                    missing_all += 1;
+                }
+
+                assert_optional_float_close(
+                    expected_all,
+                    actual_all,
+                    &format!("{target}/{accession} all-pool distance"),
+                );
+
+                let expected_main = query["distance_main_pct"].as_f64();
+                let actual_main = rule
+                    .nearest(&data, accession, &training, Pool::Main)
+                    .unwrap_or_else(|e| {
+                        panic!("{target}/{accession}: main-pool calculation failed: {e:#}")
+                    });
+
+                if actual_main.is_none() {
+                    missing_main += 1;
+                }
+
+                assert_optional_float_close(
+                    expected_main,
+                    actual_main,
+                    &format!("{target}/{accession} main-pool distance"),
+                );
+            }
+        }
+
+        assert_eq!(total_queries, 850);
+        assert_eq!(
+            missing_all,
+            reference["missing_distance_all_count"].as_u64().unwrap() as usize,
+            "all-pool missing-distance count differs"
+        );
+        assert_eq!(
+            missing_main,
+            reference["missing_distance_main_count"].as_u64().unwrap() as usize,
+            "main-pool missing-distance count differs"
+        );
+
+        println!(
+            "N6 fold parity PASS: 37 folds, {total_queries} queries, \
+             thresholds and counts matched, all/main distances matched."
+        );
+    }
+
     #[test]
     fn full_training_threshold_matches_frozen_python_reference() {
         let data = FrozenData::load(fixture().join("inputs/benchmark"))
