@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod n6_its;
+
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
