@@ -913,4 +913,357 @@ mod tests {
             assert_eq!(row.get("its_rule_fired").map(String::as_str), Some("1"));
         }
     }
+    #[test]
+    fn all_37_species_folds_match_python_decisions() {
+        use serde_json::Value;
+        use std::collections::BTreeSet;
+        use std::fs;
+
+        fn get_string(value: &Value, key: &str, context: &str) -> String {
+            value[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{context}.{key}: expected string"))
+                .to_owned()
+        }
+
+        let fixture_root = fixture();
+        let parity_dir = fixture_root.join("n6_decision_parity");
+
+        let manifest_path = fixture_root.join("n6_fold_parity/fold_manifest.json");
+        let decision_path = parity_dir.join("python_decisions.json");
+
+        let manifest_bytes = fs::read(&manifest_path).expect("frozen fold manifest should load");
+        let decision_bytes = fs::read(&decision_path).expect("Python decision fixture should load");
+
+        let manifest_sha = super::super::sha256_bytes(&manifest_bytes);
+        let decision_sha = super::super::sha256_bytes(&decision_bytes);
+
+        assert_eq!(
+            manifest_sha, "5d538237a8d0a8ba1446fc586f1f3ab04d91abd44a01669f7475abf6a96978d9",
+            "N6 fold manifest changed"
+        );
+
+        assert_eq!(
+            decision_sha, "47ef28c6c861ff90aaa106a496e36f474f77685115a530774dadb3eb020f8fcc",
+            "Python decision fixture changed"
+        );
+
+        let manifest: Value =
+            serde_json::from_slice(&manifest_bytes).expect("manifest JSON should parse");
+        let reference: Value =
+            serde_json::from_slice(&decision_bytes).expect("decision JSON should parse");
+
+        assert_eq!(
+            reference["fold_manifest_sha256"].as_str(),
+            Some(manifest_sha.as_str())
+        );
+        assert_eq!(reference["schema_version"].as_u64(), Some(1));
+        assert_eq!(reference["quantile"].as_u64(), Some(99));
+        assert_eq!(reference["pool"].as_str(), Some("all"));
+        assert_eq!(reference["fold_count"].as_u64(), Some(37));
+        assert_eq!(reference["total_query_rows"].as_u64(), Some(850));
+        assert_eq!(reference["total_fired"].as_u64(), Some(81));
+        assert_eq!(reference["total_not_fired"].as_u64(), Some(769));
+
+        let manifest_folds = manifest["folds"]
+            .as_array()
+            .expect("manifest folds should be an array");
+
+        let reference_folds = reference["folds"]
+            .as_array()
+            .expect("decision folds should be an array");
+
+        assert_eq!(manifest_folds.len(), 37);
+        assert_eq!(reference_folds.len(), 37);
+
+        let data = FrozenData::load(fixture_root.join("inputs/benchmark"))
+            .expect("frozen benchmark data should load");
+
+        let mut rule = ItsRule::new(&data).expect("N6 ITS distance cache should build");
+
+        let mut total_rows = 0usize;
+        let mut total_fired = 0usize;
+
+        for (fold_index, (manifest_fold, reference_fold)) in manifest_folds
+            .iter()
+            .zip(reference_folds.iter())
+            .enumerate()
+        {
+            let context = format!("fold {fold_index}");
+
+            let target = manifest_fold["target"]
+                .as_str()
+                .expect("manifest target should be a string");
+
+            assert_eq!(
+                reference_fold["target"].as_str(),
+                Some(target),
+                "{context}: fold target mismatch"
+            );
+
+            let manifest_training = json_string_array(&manifest_fold["training_cultures"], target);
+
+            let reference_training =
+                json_string_array(&reference_fold["training_cultures"], target);
+
+            assert_eq!(
+                manifest_training, reference_training,
+                "{target}: training cultures differ from manifest"
+            );
+
+            let training: StringSet = reference_training.iter().cloned().collect();
+
+            assert_eq!(
+                training.len(),
+                reference_training.len(),
+                "{target}: duplicate training cultures"
+            );
+
+            let held_vec = json_string_array(&reference_fold["held_cultures"], target);
+
+            assert_eq!(
+                held_vec,
+                json_string_array(&manifest_fold["held_cultures"], target),
+                "{target}: held cultures differ from manifest"
+            );
+
+            let held: StringSet = held_vec.iter().cloned().collect();
+
+            assert_eq!(held.len(), held_vec.len());
+            assert!(
+                training.is_disjoint(&held),
+                "{target}: held cultures leaked into training"
+            );
+
+            let query_ids = json_string_array(&reference_fold["query_ids"], target);
+
+            assert_eq!(
+                query_ids,
+                json_string_array(&manifest_fold["query_ids"], target),
+                "{target}: query IDs differ from manifest"
+            );
+
+            let query_set: BTreeSet<String> = query_ids.iter().cloned().collect();
+
+            assert_eq!(
+                query_set.len(),
+                query_ids.len(),
+                "{target}: duplicate query IDs"
+            );
+
+            let reference_rows = reference_fold["rows"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{target}: rows should be an array"));
+
+            assert_eq!(
+                reference_rows.len(),
+                query_ids.len(),
+                "{target}: row count differs from query count"
+            );
+
+            let mut rows: Vec<Row> = Vec::with_capacity(reference_rows.len());
+            let mut rec: BTreeMap<String, Row> = BTreeMap::new();
+            let mut seen = BTreeSet::new();
+
+            for (row_index, reference_row) in reference_rows.iter().enumerate() {
+                let row_context = format!("{target}, row {row_index}");
+
+                let accession = get_string(reference_row, "accession", &row_context);
+
+                let culture = get_string(reference_row, "culture", &row_context);
+
+                let copy_class = get_string(reference_row, "copy_class", &row_context);
+
+                assert!(
+                    seen.insert(accession.clone()),
+                    "{row_context}: duplicate accession {accession}"
+                );
+
+                assert!(
+                    held.contains(&culture),
+                    "{row_context}: query culture is not held out: {culture}"
+                );
+
+                let baseline = &reference_row["baseline"];
+
+                let mut row = Row::new();
+
+                row.insert("accession".into(), accession.clone());
+                row.insert("culture".into(), culture);
+                row.insert("copy_class".into(), copy_class);
+
+                for field in [
+                    "status",
+                    "placement",
+                    "call_genera",
+                    "reasons",
+                    "novelty_claim",
+                ] {
+                    row.insert(field.into(), get_string(baseline, field, &row_context));
+                }
+
+                // The original reconciliation row supplies call_genera
+                // when N6 changes the placement.
+                rec.insert(accession, row.clone());
+                rows.push(row);
+            }
+
+            assert_eq!(
+                seen, query_set,
+                "{target}: fixture rows do not cover the exact query set"
+            );
+
+            // Applying N6 must not mutate the original baseline rows.
+            let baseline_snapshot = rows.clone();
+
+            let fired = rule
+                .apply(&data, &mut rows, &rec, &training, Pool::All, 99)
+                .unwrap_or_else(|e| panic!("{target}: N6 application failed: {e}"));
+
+            assert_eq!(
+                rows.len(),
+                baseline_snapshot.len(),
+                "{target}: N6 changed row count"
+            );
+
+            assert_eq!(
+                rows.len(),
+                reference_rows.len(),
+                "{target}: output row count differs from Python"
+            );
+
+            let mut fold_fired = 0usize;
+
+            for (row_index, (actual, expected_row)) in
+                rows.iter().zip(reference_rows.iter()).enumerate()
+            {
+                let accession = row_value(actual, "accession").unwrap();
+                let context = format!("{target}, {accession}");
+
+                let expected = &expected_row["expected"];
+
+                // Exact classification and output compatibility.
+                for field in [
+                    "status",
+                    "placement",
+                    "reasons",
+                    "novelty_claim",
+                    "its_nearest_training_pct",
+                    "its_threshold_pct",
+                    "its_pool",
+                ] {
+                    let expected_value = get_string(expected, field, &context);
+
+                    assert_eq!(
+                        actual.get(field).map(String::as_str),
+                        Some(expected_value.as_str()),
+                        "{context}: field {field} differs from Python"
+                    );
+                }
+
+                let expected_fired = expected["its_rule_fired"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("{context}: missing expected firing decision"));
+
+                let actual_fired = actual["its_rule_fired"]
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| panic!("{context}: invalid Rust firing decision"));
+
+                assert_eq!(
+                    actual_fired, expected_fired,
+                    "{context}: N6 firing decision differs"
+                );
+
+                let expected_n = expected["its_threshold_n"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("{context}: missing expected threshold count"));
+
+                let actual_n = actual["its_threshold_n"]
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| panic!("{context}: invalid threshold count"));
+
+                assert_eq!(
+                    actual_n, expected_n,
+                    "{context}: threshold sample count differs"
+                );
+
+                fold_fired += actual_fired as usize;
+
+                // N6 must preserve fields it does not own.
+                for field in ["accession", "culture", "copy_class", "call_genera"] {
+                    assert_eq!(
+                        actual.get(field),
+                        baseline_snapshot[row_index].get(field),
+                        "{context}: N6 unexpectedly changed {field}"
+                    );
+                }
+            }
+
+            assert_eq!(
+                fired, fold_fired,
+                "{target}: apply() firing count differs from row decisions"
+            );
+
+            assert_eq!(
+                fold_fired as u64,
+                reference_fold["fired"].as_u64().unwrap(),
+                "{target}: aggregate firing count differs from Python"
+            );
+
+            assert_eq!(
+                rows.len(),
+                baseline_snapshot.len(),
+                "{target}: baseline/output length changed"
+            );
+
+            assert_eq!(
+                baseline_snapshot,
+                reference_rows
+                    .iter()
+                    .map(|reference_row| {
+                        let accession = get_string(reference_row, "accession", target);
+
+                        let baseline = &reference_row["baseline"];
+                        let mut row = Row::new();
+
+                        row.insert("accession".into(), accession);
+                        row.insert(
+                            "culture".into(),
+                            get_string(reference_row, "culture", target),
+                        );
+                        row.insert(
+                            "copy_class".into(),
+                            get_string(reference_row, "copy_class", target),
+                        );
+
+                        for field in [
+                            "status",
+                            "placement",
+                            "call_genera",
+                            "reasons",
+                            "novelty_claim",
+                        ] {
+                            row.insert(field.into(), get_string(baseline, field, target));
+                        }
+
+                        row
+                    })
+                    .collect::<Vec<Row>>(),
+                "{target}: original baseline rows were altered"
+            );
+
+            total_rows += rows.len();
+            total_fired += fired;
+        }
+
+        assert_eq!(total_rows, 850);
+        assert_eq!(total_fired, 81);
+
+        println!(
+            "N6 decision parity PASS: 37 folds, {total_rows} queries, \
+             {total_fired} firing decisions, {} non-firing decisions; \
+             classifications, reasons and metadata matched Python.",
+            total_rows - total_fired
+        );
+    }
 }
