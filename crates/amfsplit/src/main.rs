@@ -39,6 +39,38 @@ enum Command {
     /// Run the frozen M2b naming reproducibility gate (both holdouts, per-copy golden parity):
     /// Gate 0a, the nearest-reference LSU arm, and Gate 0b step 1, the LSU species-clade arm.
     Gate0(Gate0Args),
+    /// Summarize an EPA-ng jplace into the placement table the naming arms read
+    /// (lsu_placements.copies.tsv; frozen lsu_placement.py summarize).
+    PlaceSummary(PlaceSummaryArgs),
+}
+
+#[derive(Args)]
+struct PlaceSummaryArgs {
+    /// EPA-ng output (epa_result.jplace)
+    #[arg(long)]
+    jplace: PathBuf,
+    /// Reference metadata (ref_id, is_amf, label, genus) of the tree in the jplace
+    #[arg(long)]
+    metadata: PathBuf,
+    /// Raw query windows (LSU)
+    #[arg(long)]
+    queries: PathBuf,
+    /// The same queries as aligned to the reference (MAFFT --addfragments --keeplength)
+    #[arg(long)]
+    aligned: PathBuf,
+    /// Output TSV
+    #[arg(short = 'o', long)]
+    out: PathBuf,
+    /// Credible mass
+    #[arg(long, default_value_t = 0.95)]
+    mass: f64,
+}
+
+fn place_summary_cmd(a: PlaceSummaryArgs) -> Result<()> {
+    let rows = amfsplit_naming::summarize_placements(&a.jplace, &a.metadata, &a.queries, &a.aligned, a.mass)?;
+    std::fs::write(&a.out, amfsplit_naming::placement_tsv(&rows))?;
+    println!("{} queries summarized into {}", rows.len(), a.out.display());
+    Ok(())
 }
 
 #[derive(Args)]
@@ -107,7 +139,7 @@ struct Gate0Args {
     /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2), rounds (the 52
     /// LSU-removal and genus rounds; needs --benchmark), lgdb (the LongGloDB test; needs
     /// --benchmark and --lgdb), euk (the EUKARYOME test; needs --benchmark and --euk) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "euk", "all"])]
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "euk", "placement", "all"])]
     policy: String,
     /// amf-novelty-benchmark checkout holding the archived rounds (release 0.3.2 or later);
     /// defaults to $AMFSPLIT_BENCHMARK.
@@ -124,6 +156,10 @@ struct Gate0Args {
     /// Used with --benchmark.
     #[arg(long)]
     euk: Option<PathBuf>,
+    /// Runs folder of the LSU-removal test (the --out of external_holdout.py, with each round's
+    /// jplace); defaults to $AMFSPLIT_M4_RUNS. Used with --benchmark for --policy placement.
+    #[arg(long)]
+    m4_runs: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -371,6 +407,20 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
             _ => println!("EUKARYOME: SKIPPED (needs --benchmark and --euk, or AMFSPLIT_BENCHMARK and AMFSPLIT_EUK)"),
         }
     }
+    if matches!(a.policy.as_str(), "placement" | "all") {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let bench = a.benchmark.clone().or_else(|| env("AMFSPLIT_BENCHMARK"));
+        let runs = a.m4_runs.clone().or_else(|| env("AMFSPLIT_M4_RUNS"));
+        match (bench, runs) {
+            (Some(b), Some(r)) => {
+                let report = amfsplit_naming::run_placement_parity(&b, &r, a.round.as_deref())?;
+                print!("{}", report.summary());
+                passed &= report.passed();
+            }
+            _ if a.policy == "placement" => anyhow::bail!("--policy placement needs --benchmark and --m4-runs (or AMFSPLIT_BENCHMARK and AMFSPLIT_M4_RUNS)"),
+            _ => println!("Placement summaries: SKIPPED (needs --benchmark and --m4-runs, or AMFSPLIT_BENCHMARK and AMFSPLIT_M4_RUNS)"),
+        }
+    }
     if !passed {
         anyhow::bail!("frozen naming reproducibility gate failed");
     }
@@ -385,6 +435,7 @@ fn main() -> std::process::ExitCode {
         Command::Validate(a) => validate_cmd(a),
         Command::Triage(a) => triage_cmd(a),
         Command::Gate0(a) => gate0_cmd(a),
+        Command::PlaceSummary(a) => place_summary_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

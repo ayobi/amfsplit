@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 mod n6_its;
 mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
+mod placement;
+pub use placement::{placement_tsv, run_placement_parity, summarize_placements, PlacementReport, PLACEMENT_HEADERS};
 
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
@@ -1363,6 +1365,25 @@ mod tests {
         };
         let report = run_gate0b_rounds(fixture(), &bench, None).unwrap_or_else(|e| panic!("running the LSU-removal rounds failed: {e:#}"));
         assert!(report.passed(), "{}", report.summary());
+    }
+
+    #[test]
+    fn placement_summaries_match_the_published_rounds() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(runs)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_M4_RUNS")) else {
+            eprintln!("SKIPPED placement summaries: set AMFSPLIT_BENCHMARK and AMFSPLIT_M4_RUNS (the local runs folder of the LSU-removal test)");
+            return;
+        };
+        let report = run_placement_parity(&bench, &runs, None).unwrap_or_else(|e| panic!("summarizing the placements failed: {e:#}"));
+        assert!(report.passed(), "{}", report.summary());
+    }
+
+    #[test]
+    fn python_fsum_and_isclose_behaviour() {
+        assert_eq!(placement::tests_support::fsum(vec![0.1; 10]), 1.0);
+        assert_eq!(placement::tests_support::fsum(vec![1e100, 1.0, -1e100, 1e-100]), 1.0);
+        assert_eq!(placement::tests_support::fsum(Vec::<f64>::new()).to_bits(), 0.0f64.to_bits());
+        assert_eq!(py_float(-placement::tests_support::fsum(vec![0.0])), "-0.0");
     }
 
     #[test]
