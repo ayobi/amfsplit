@@ -105,8 +105,9 @@ struct Gate0Args {
     fixtures: Option<PathBuf>,
     /// Which method to check: baseline (Gate 0a), species-clades (Gate 0b step 1), n6 (species
     /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2), rounds (the 52
-    /// LSU-removal and genus rounds; needs --benchmark) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "all"])]
+    /// LSU-removal and genus rounds; needs --benchmark), lgdb (the LongGloDB test; needs
+    /// --benchmark and --lgdb) or all.
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "all"])]
     policy: String,
     /// amf-novelty-benchmark checkout holding the archived rounds (release 0.3.2 or later);
     /// defaults to $AMFSPLIT_BENCHMARK.
@@ -115,6 +116,10 @@ struct Gate0Args {
     /// Only the rounds whose key starts with this (e.g. species_glomus).
     #[arg(long)]
     round: Option<String>,
+    /// Folder with the LongGloDB test windows and test evidence (never redistributed);
+    /// defaults to $AMFSPLIT_LGDB. Used with --benchmark.
+    #[arg(long)]
+    lgdb: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -332,6 +337,20 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
             }
             None if a.policy == "rounds" => anyhow::bail!("--policy rounds needs --benchmark or AMFSPLIT_BENCHMARK"),
             None => println!("LSU-removal rounds: SKIPPED (no --benchmark or AMFSPLIT_BENCHMARK)"),
+        }
+    }
+    if matches!(a.policy.as_str(), "lgdb" | "all") {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let bench = a.benchmark.clone().or_else(|| env("AMFSPLIT_BENCHMARK"));
+        let lg = a.lgdb.clone().or_else(|| env("AMFSPLIT_LGDB"));
+        match (bench, lg) {
+            (Some(b), Some(l)) => {
+                let report = amfsplit_naming::run_gate0b_lgdb(&fixtures, &b, &l)?;
+                print!("{}", report.summary());
+                passed &= report.passed();
+            }
+            _ if a.policy == "lgdb" => anyhow::bail!("--policy lgdb needs --benchmark and --lgdb (or AMFSPLIT_BENCHMARK and AMFSPLIT_LGDB)"),
+            _ => println!("LongGloDB: SKIPPED (needs --benchmark and --lgdb, or AMFSPLIT_BENCHMARK and AMFSPLIT_LGDB)"),
         }
     }
     if !passed {

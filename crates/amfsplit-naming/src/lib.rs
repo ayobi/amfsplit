@@ -10,6 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod n6_its;
+mod lgdb;
+pub use lgdb::{run_gate0b_lgdb, LgdbReport};
 
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
@@ -1350,6 +1352,17 @@ mod tests {
             }
         };
         let report = run_gate0b_rounds(fixture(), &bench, None).unwrap_or_else(|e| panic!("running the LSU-removal rounds failed: {e:#}"));
+        assert!(report.passed(), "{}", report.summary());
+    }
+
+    #[test]
+    fn longglodb_test_matches_the_published_run() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lg)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB")) else {
+            eprintln!("SKIPPED LongGloDB: set AMFSPLIT_BENCHMARK and AMFSPLIT_LGDB (the local LongGloDB windows and test evidence)");
+            return;
+        };
+        let report = run_gate0b_lgdb(fixture(), &bench, &lg).unwrap_or_else(|e| panic!("running the LongGloDB test failed: {e:#}"));
         assert!(report.passed(), "{}", report.summary());
     }
 
