@@ -42,6 +42,74 @@ enum Command {
     /// Summarize an EPA-ng jplace into the placement table the naming arms read
     /// (lsu_placements.copies.tsv; frozen lsu_placement.py summarize).
     PlaceSummary(PlaceSummaryArgs),
+    /// Place LSU windows on the frozen V18 reference: MAFFT --addfragments, EPA-ng, then the
+    /// placement summary, with the frozen arguments and thread counts.
+    Place(PlaceArgs),
+}
+
+#[derive(Args)]
+struct PlaceArgs {
+    /// LSU windows to place (e.g. LSU_LROR-FLR2.fasta from `amfsplit regions`)
+    #[arg(short = 'q', long)]
+    queries: PathBuf,
+    /// Reference folder: reference.aligned.fasta, fit.raxml.bestTree, fit.raxml.bestModel,
+    /// reference_metadata.tsv (the frozen V18 reference; checked by hash)
+    #[arg(short = 'r', long)]
+    reference: PathBuf,
+    /// Output folder (new or empty)
+    #[arg(short = 'o', long)]
+    out: PathBuf,
+    #[arg(long, default_value = "mafft")]
+    mafft: String,
+    #[arg(long, default_value = "epa-ng")]
+    epa_ng: String,
+    /// MAFFT --thread (the frozen build used 4)
+    #[arg(long, default_value_t = 4)]
+    mafft_threads: usize,
+    /// EPA-ng --threads (the frozen build used 8; other counts give the same calls but can break
+    /// exact ties between edges differently)
+    #[arg(long, default_value_t = 8)]
+    epa_threads: usize,
+    #[arg(long, default_value_t = 0.95)]
+    mass: f64,
+    /// Use a reference whose files differ from the frozen V18 reference
+    #[arg(long)]
+    allow_other_reference: bool,
+    /// Compare the result with this placement table (tied best edges allowed). For the frozen 903
+    /// culture windows the frozen table in this checkout's parity/naming/placement is used by default.
+    #[arg(long)]
+    compare_with: Option<PathBuf>,
+}
+
+fn place_cmd(a: PlaceArgs) -> Result<()> {
+    use amfsplit_naming::TableMatch;
+    let frozen_table = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/placement/lsu_placements.copies.tsv");
+    // the frozen table is the default comparison for the frozen query set
+    let frozen_queries = std::fs::read(&a.queries).ok()
+        .map(|b| { use sha2::{Digest, Sha256}; format!("{:x}", Sha256::digest(&b)) == amfsplit_naming::FROZEN_QUERIES_SHA }).unwrap_or(false);
+    let compare_with = a.compare_with.clone().or_else(|| (frozen_queries && frozen_table.is_file()).then(|| frozen_table.clone()));
+    let report = amfsplit_naming::run_place(&amfsplit_naming::PlaceOptions {
+        reference_dir: a.reference, queries: a.queries, out: a.out.clone(), mafft: a.mafft, epa_ng: a.epa_ng,
+        mafft_threads: a.mafft_threads, epa_threads: a.epa_threads, mass: a.mass, allow_other_reference: a.allow_other_reference,
+        compare_with: compare_with.clone(),
+    })?;
+    println!("{} queries placed; {} (SHA-256 {})", report.queries, a.out.join("lsu_placements.copies.tsv").display(), report.table_sha256);
+    let what = if report.frozen_inputs { "FROZEN M2b PLACEMENT" } else { "COMPARISON TABLE" };
+    match &report.comparison {
+        Some(TableMatch::Exact) => println!("{what} REPRODUCED byte for byte"),
+        Some(TableMatch::UpToTiedBestEdges(rows)) => {
+            println!("{what} REPRODUCED up to tied best edges: in {} row(s) ({}) best_edge names another of the edges tied for the top weight;",
+                     rows.len(), rows.join(", "));
+            println!("  EPA-ng lists tied placements in run-dependent order. Every other cell is identical, and no naming step reads best_edge.");
+        }
+        Some(TableMatch::Different(n, first)) => {
+            println!("{what} NOT REPRODUCED: {n} row(s) differ beyond tied best edges");
+            for d in first { println!("  {d}"); }
+            std::process::exit(1);
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 #[derive(Args)]
@@ -436,6 +504,7 @@ fn main() -> std::process::ExitCode {
         Command::Triage(a) => triage_cmd(a),
         Command::Gate0(a) => gate0_cmd(a),
         Command::PlaceSummary(a) => place_summary_cmd(a),
+        Command::Place(a) => place_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

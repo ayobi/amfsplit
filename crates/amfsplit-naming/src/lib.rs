@@ -13,7 +13,7 @@ mod n6_its;
 mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 mod placement;
-pub use placement::{placement_tsv, run_placement_parity, summarize_placements, PlacementReport, PLACEMENT_HEADERS};
+pub use placement::{compare_up_to_ties, placement_tsv, run_place, run_placement_parity, summarize_placements, PlaceOptions, PlaceReport, PlacementReport, TableMatch, TopTies, FROZEN_QUERIES_SHA, FROZEN_TABLE_SHA, PLACEMENT_HEADERS, REFERENCE_PINS};
 
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;

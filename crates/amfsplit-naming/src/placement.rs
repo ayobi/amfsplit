@@ -214,6 +214,14 @@ fn credible_edges(ps: &[Placement], mass: f64) -> Result<Vec<&Placement>> {
 
 /// One row per query, sorted by accession, with `PLACEMENT_HEADERS` as columns.
 pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<Vec<Row>> {
+    Ok(summarize_with_ties(jplace, metadata, queries, aligned, mass)?.0)
+}
+
+/// Edges tied for the top like_weight_ratio, per query. The frozen `best_edge` is the first of them in
+/// EPA-ng's list, and EPA-ng does not list tied placements in the same order on every run.
+pub type TopTies = BTreeMap<String, BTreeSet<usize>>;
+
+fn summarize_with_ties(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<(Vec<Row>, TopTies)> {
     let meta: BTreeMap<String, Row> = read_table(metadata)?.rows.into_iter()
         .map(|r| Ok((row_value(&r, "ref_id")?.to_owned(), r))).collect::<Result<_>>()?;
     let data: Value = serde_json::from_str(&fs::read_to_string(jplace).with_context(|| format!("reading {}", jplace.display()))?)?;
@@ -227,6 +235,7 @@ pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, alig
     let (ce, cw, cp, cd) = (col("edge_num")?, col("like_weight_ratio")?, col("pendant_length")?, col("distal_length")?);
 
     let mut rows: Vec<Row> = Vec::new();
+    let mut ties: TopTies = BTreeMap::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for rec in data.get("placements").and_then(Value::as_array).ok_or_else(|| anyhow!("jplace has no placements"))? {
         let mut ps = Vec::new();
@@ -277,8 +286,10 @@ pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, alig
         let lwr_sum = fsum(ps.iter().map(|p| p.lwr.f()));
         let entropy = -fsum(ps.iter().filter(|p| p.lwr.f() > 0.0).map(|p| p.lwr.f() * p.lwr.f().ln()));
         let retained = fsum(cs.iter().map(|p| p.lwr.f()));
+        let top: BTreeSet<usize> = ps.iter().filter(|p| p.lwr.f() == best.lwr.f()).map(|p| p.edge).collect();
         for x in names {
             if !seen.insert(x.clone()) || !raw.contains_key(&x) { bail!("duplicate or unknown placement query {x}"); }
+            ties.insert(x.clone(), top.clone());
             let count = |s: &str, skip: &str| s.chars().filter(|c| !skip.contains(*c)).count();
             let aligned_bases = count(&aligned[&x], "-.");
             let raw_bases = count(&raw[&x], "-.");
@@ -298,7 +309,41 @@ pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, alig
     }
     if seen.len() != raw.len() { bail!("not every query has a placement ({} of {})", seen.len(), raw.len()); }
     rows.sort_by(|a, b| a.get("accession").cmp(&b.get("accession")));
-    Ok(rows)
+    Ok((rows, ties))
+}
+
+/// How a placement table compares with an expected one, allowing for tied best edges.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TableMatch {
+    /// byte for byte
+    Exact,
+    /// every cell equal except `best_edge` in these rows, where the expected edge is one of the edges
+    /// tied for the top weight in this run
+    UpToTiedBestEdges(Vec<String>),
+    /// any other difference: (rows differing, first differences)
+    Different(usize, Vec<String>),
+}
+
+pub fn compare_up_to_ties(rows: &[Row], ties: &TopTies, expected: &Path) -> Result<TableMatch> {
+    if placement_tsv(rows) == fs::read(expected)? { return Ok(TableMatch::Exact); }
+    let exp = read_table(expected)?;
+    let mine: BTreeMap<&str, &Row> = rows.iter().map(|r| (r.get("accession").map(String::as_str).unwrap_or(""), r)).collect();
+    let (mut tied, mut other, mut first) = (Vec::new(), BTreeSet::new(), Vec::new());
+    if exp.headers.iter().map(String::as_str).ne(PLACEMENT_HEADERS) { bail!("{} does not have the placement table's columns", expected.display()); }
+    if exp.rows.len() != rows.len() { other.insert("(row count)".to_owned()); }
+    for e in &exp.rows {
+        let x = row_value(e, "accession")?;
+        let Some(m) = mine.get(x) else { other.insert(x.to_owned()); continue };
+        for h in PLACEMENT_HEADERS {
+            let (a, b) = (m.get(h).map(String::as_str).unwrap_or(""), e.get(h).map(String::as_str).unwrap_or(""));
+            if a == b { continue; }
+            let tie_ok = h == "best_edge" && b.parse::<usize>().ok().is_some_and(|edge| ties.get(x).is_some_and(|t| t.contains(&edge) && t.len() > 1));
+            if tie_ok { tied.push(x.to_owned()); continue; }
+            other.insert(x.to_owned());
+            if first.len() < 6 { first.push(format!("{x} [{h}]: got {a:?}; expected {b:?}")); }
+        }
+    }
+    Ok(if other.is_empty() { TableMatch::UpToTiedBestEdges(tied) } else { TableMatch::Different(other.len(), first) })
 }
 
 /// The rows as the frozen code writes them (csv.DictWriter, tab-separated, '\n').
@@ -366,4 +411,172 @@ pub fn run_placement_parity(benchmark_dir: impl AsRef<Path>, runs_dir: impl AsRe
 #[cfg(test)]
 pub(crate) mod tests_support {
     pub fn fsum(v: Vec<f64>) -> f64 { super::fsum(v) }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The front half: MAFFT and EPA-ng with the frozen arguments (lsu_placement.py `build`, query part).
+
+/// The frozen V18 reference of the paper (frozen_m2b/reference): alignment, RAxML-NG tree and model,
+/// metadata. `place` refuses another reference unless asked, so that a run is the paper's method.
+pub const REFERENCE_PINS: [(&str, &str); 4] = [
+    ("reference.aligned.fasta", "1cd6426557f842d9e0085b95f02f3156406d43fb71f840a2c6891bece769ce33"),
+    ("fit.raxml.bestTree", "d3da113b83e3d185ebfe10fd1958aa121e401c0dd035c74350ef607a74abf11b"),
+    ("fit.raxml.bestModel", "2e7a4dd93fd75c60586bad52a2fd4e4c5a73043289e89ad87f686df21e2a6194"),
+    ("reference_metadata.tsv", "5c38fd7fddd3896492644503359917d5fbd1ac3d4c818c0b4c7fc8a49ff5591d"),
+];
+/// The 903 culture LSU windows (culture reference v4, LSU_LROR-FLR2.fasta) and the frozen table they give.
+pub const FROZEN_QUERIES_SHA: &str = "18679043a974d1bff4fdf798c0f74655d7444e1b0916a5c0c8356c796a9cca2f";
+pub const FROZEN_TABLE_SHA: &str = "1de103b6ae45f0372dda9ab0799230c4d1243cb98add943e5bab67785e5e910d";
+
+pub struct PlaceOptions {
+    pub reference_dir: std::path::PathBuf,
+    pub queries: std::path::PathBuf,
+    pub out: std::path::PathBuf,
+    pub mafft: String,
+    pub epa_ng: String,
+    /// MAFFT --thread; the frozen build used 4
+    pub mafft_threads: usize,
+    /// EPA-ng --threads; the frozen build used 8. Other counts give the same calls but can break exact
+    /// ties between edges differently, so only 8 reproduces the frozen table byte for byte.
+    pub epa_threads: usize,
+    pub mass: f64,
+    pub allow_other_reference: bool,
+    /// Table to compare the result with. When the queries are the frozen 903 culture windows on the
+    /// pinned reference at the frozen settings, the caller passes the frozen M2b table here.
+    pub compare_with: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaceReport {
+    pub queries: usize,
+    pub table_sha256: String,
+    /// true when the queries are the frozen 903 culture windows on the pinned reference at the frozen settings
+    pub frozen_inputs: bool,
+    /// the comparison with `compare_with`, when one was given
+    pub comparison: Option<TableMatch>,
+}
+
+/// FASTA in file order, as Biopython reads it: ID = first word of the header, sequence uppercased.
+fn read_fasta_ordered(path: &Path) -> Result<Vec<(String, String)>> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(head) = line.strip_prefix('>') {
+            let id = head.split_whitespace().next().ok_or_else(|| anyhow!("empty FASTA header in {}", path.display()))?.to_owned();
+            if !seen.insert(id.clone()) { bail!("duplicate FASTA ID {id} in {}", path.display()); }
+            out.push((id, String::new()));
+        } else if let Some(last) = out.last_mut() {
+            last.1.extend(line.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_uppercase()));
+        }
+    }
+    if out.is_empty() { bail!("empty FASTA: {}", path.display()); }
+    Ok(out)
+}
+
+fn resolve_tool(name: &str) -> Result<std::path::PathBuf> {
+    let p = Path::new(name);
+    if p.components().count() > 1 { return Ok(p.to_path_buf()); }
+    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(name)).find(|c| c.is_file()))
+        .ok_or_else(|| anyhow!("{name} is not on PATH"))
+}
+
+fn run_logged(cmd: &[String], log: &Path, stdout: Option<&Path>) -> Result<()> {
+    let err = fs::File::create(log)?;
+    let mut c = std::process::Command::new(&cmd[0]);
+    c.args(&cmd[1..]);
+    match stdout {
+        Some(path) => { c.stdout(fs::File::create(path)?).stderr(err); }
+        None => { c.stdout(err.try_clone()?).stderr(err); }
+    }
+    let status = c.status().with_context(|| format!("starting {}", cmd[0]))?;
+    if !status.success() { bail!("{} failed ({status}); see {}", cmd[0], log.display()); }
+    Ok(())
+}
+
+fn tool_version(tool: &Path) -> String {
+    std::process::Command::new(tool).arg("--version").output().ok()
+        .map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+        .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_owned)).unwrap_or_default()
+}
+
+/// Place LSU windows on the pinned V18 reference: MAFFT --addfragments --keeplength onto the
+/// reference alignment, EPA-ng on the RAxML-NG tree and model, then the placement summary.
+/// Writes into `out` (which must be new or empty): queries.fasta, combined.aligned.fasta,
+/// queries.aligned.fasta, epa/, logs/, lsu_placements.copies.tsv and run.json.
+pub fn run_place(o: &PlaceOptions) -> Result<PlaceReport> {
+    let rd = &o.reference_dir;
+    let mut pinned_ok = true;
+    for (name, sha) in REFERENCE_PINS {
+        let got = sha256_file(&rd.join(name))?;
+        if got != sha {
+            if !o.allow_other_reference { bail!("{} is not the frozen V18 reference ({got}); pass --allow-other-reference to use it anyway", rd.join(name).display()); }
+            pinned_ok = false;
+        }
+    }
+    if o.out.exists() && fs::read_dir(&o.out)?.next().is_some() { bail!("{} must be new or empty; earlier results are preserved", o.out.display()); }
+    let (logs, epa) = (o.out.join("logs"), o.out.join("epa"));
+    fs::create_dir_all(&logs)?;
+    fs::create_dir_all(&epa)?;
+    let mafft = resolve_tool(&o.mafft)?;
+    let epa_ng = resolve_tool(&o.epa_ng)?;
+    let queries = o.out.join("queries.fasta");
+    fs::copy(&o.queries, &queries)?;
+    let qseq = read_fasta_ordered(&queries)?;
+    let refs = read_fasta_ordered(&rd.join("reference.aligned.fasta"))?;
+    let s = |p: &Path| p.display().to_string();
+    let mut commands: Vec<Vec<String>> = Vec::new();
+
+    let combined_path = o.out.join("combined.aligned.fasta");
+    let cmd: Vec<String> = vec![s(&mafft), "--auto".into(), "--addfragments".into(), s(&queries), "--keeplength".into(), "--mapout".into(),
+                                "--thread".into(), o.mafft_threads.to_string(), s(&rd.join("reference.aligned.fasta"))];
+    run_logged(&cmd, &logs.join("query_mafft.log"), Some(&combined_path))?;
+    commands.push(cmd);
+    let combined: BTreeMap<String, String> = read_fasta_ordered(&combined_path)?.into_iter().collect();
+    let expected: BTreeSet<&String> = refs.iter().map(|(x, _)| x).chain(qseq.iter().map(|(x, _)| x)).collect();
+    if combined.len() != expected.len() || combined.keys().any(|x| !expected.contains(x))
+        || refs.iter().any(|(x, seq)| combined.get(x) != Some(seq)) {
+        bail!("MAFFT changed the reference alignment or the IDs differ");
+    }
+    let aligned_path = o.out.join("queries.aligned.fasta");
+    let mut aligned = String::new();
+    for (x, _) in &qseq { aligned.push('>'); aligned.push_str(x); aligned.push('\n'); aligned.push_str(&combined[x]); aligned.push('\n'); }
+    fs::write(&aligned_path, aligned)?;
+
+    let cmd: Vec<String> = vec![s(&epa_ng), "--ref-msa".into(), s(&rd.join("reference.aligned.fasta")), "--tree".into(), s(&rd.join("fit.raxml.bestTree")),
+                                "--query".into(), s(&aligned_path), "--model".into(), s(&rd.join("fit.raxml.bestModel")), "--outdir".into(), s(&epa),
+                                "--threads".into(), o.epa_threads.to_string(), "--no-heur".into(), "--no-pre-mask".into(),
+                                "--filter-min-lwr".into(), "0".into(), "--filter-max".into(), "2000".into(), "--precision".into(), "12".into()];
+    run_logged(&cmd, &logs.join("epa.log"), None)?;
+    commands.push(cmd);
+
+    let (rows, ties) = summarize_with_ties(&epa.join("epa_result.jplace"), &rd.join("reference_metadata.tsv"), &queries, &aligned_path, o.mass)?;
+    let table = o.out.join("lsu_placements.copies.tsv");
+    fs::write(&table, placement_tsv(&rows))?;
+    let table_sha256 = sha256_file(&table)?;
+    let frozen_inputs = pinned_ok && sha256_file(&queries)? == FROZEN_QUERIES_SHA
+        && o.mafft_threads == 4 && o.epa_threads == 8 && o.mass == 0.95;
+    let comparison = match &o.compare_with { Some(t) => Some(compare_up_to_ties(&rows, &ties, t)?), None => None };
+    if frozen_inputs && o.compare_with.is_none() && table_sha256 != FROZEN_TABLE_SHA {
+        bail!("the frozen 903 windows gave a table other than the frozen one; pass the frozen table to see how it differs");
+    }
+    let comparison_text = comparison.as_ref().map(|c| match c {
+        TableMatch::Exact => "byte-identical".to_owned(),
+        TableMatch::UpToTiedBestEdges(r) => format!("identical except a tied best edge in {} rows: {}", r.len(), r.join(";")),
+        TableMatch::Different(n, _) => format!("{n} rows differ beyond tied best edges"),
+    });
+    let tools = serde_json::json!({
+        "mafft": {"path": s(&mafft), "version": tool_version(&mafft), "sha256": sha256_file(&mafft).unwrap_or_default()},
+        "epa_ng": {"path": s(&epa_ng), "version": tool_version(&epa_ng), "sha256": sha256_file(&epa_ng).unwrap_or_default()},
+    });
+    let run = serde_json::json!({
+        "commands": commands, "tools": tools, "reference_pinned": pinned_ok,
+        "inputs": {"queries.fasta": sha256_file(&queries)?, "reference": REFERENCE_PINS.iter().map(|(n, _)| (n.to_string(), sha256_file(&rd.join(n)).unwrap_or_default())).collect::<BTreeMap<_, _>>()},
+        "outputs": {"lsu_placements.copies.tsv": table_sha256, "queries": rows.len()},
+        "frozen_inputs": frozen_inputs,
+        "comparison": {"with": o.compare_with.as_ref().map(|p| s(p)), "result": comparison_text},
+    });
+    fs::write(o.out.join("run.json"), serde_json::to_string_pretty(&run)? + "\n")?;
+    Ok(PlaceReport { queries: rows.len(), table_sha256, frozen_inputs, comparison })
 }
