@@ -104,9 +104,17 @@ struct Gate0Args {
     #[arg(long)]
     fixtures: Option<PathBuf>,
     /// Which method to check: baseline (Gate 0a), species-clades (Gate 0b step 1), n6 (species
-    /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "all"])]
+    /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2), rounds (the 52
+    /// LSU-removal and genus rounds; needs --benchmark) or all.
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "all"])]
     policy: String,
+    /// amf-novelty-benchmark checkout holding the archived rounds (release 0.3.2 or later);
+    /// defaults to $AMFSPLIT_BENCHMARK.
+    #[arg(long)]
+    benchmark: Option<PathBuf>,
+    /// Only the rounds whose key starts with this (e.g. species_glomus).
+    #[arg(long)]
+    round: Option<String>,
 }
 
 #[derive(Args)]
@@ -313,6 +321,18 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
         let report = amfsplit_naming::run_gate0b_n6(&fixtures)?;
         print!("{}", report.summary());
         passed &= report.passed();
+    }
+    if matches!(a.policy.as_str(), "rounds" | "all") {
+        let bench = a.benchmark.clone().or_else(|| std::env::var_os("AMFSPLIT_BENCHMARK").filter(|v| !v.is_empty()).map(PathBuf::from));
+        match bench {
+            Some(b) => {
+                let report = amfsplit_naming::run_gate0b_rounds(&fixtures, &b, a.round.as_deref())?;
+                print!("{}", report.summary());
+                passed &= report.passed();
+            }
+            None if a.policy == "rounds" => anyhow::bail!("--policy rounds needs --benchmark or AMFSPLIT_BENCHMARK"),
+            None => println!("LSU-removal rounds: SKIPPED (no --benchmark or AMFSPLIT_BENCHMARK)"),
+        }
     }
     if !passed {
         anyhow::bail!("frozen naming reproducibility gate failed");

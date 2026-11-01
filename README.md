@@ -18,7 +18,7 @@ release 0.3.1 assignment for assignment.
 |---|---|
 | `regions`: Stage 1 (amfsplit.py v0.3.1) in Rust | Done. Byte-identical on the 12 parity cases, the 904 deposited culture sequences, the 280 LongGloDB ASVs and the 5,546 EUKARYOME reads (`parity/stage1`) |
 | `validate` + `triage`: AMF or not, from the best hit of the LR0R–FLR2 window (validate_windows.py and triage.py v0.3.1) | Done. Byte-identical on 7 parity cases, vsearch included. New `--amf-reference`, and no default AMF rule, because the prototype's default outgroups do not fit V18 (`parity/triage`) |
-| `gate0`: frozen naming method and per-copy parity | Gate 0a (nearest-reference LSU arm) and Gate 0b steps 1 and 2 (LSU species clades; species clades plus the ITS distance rule N6, the paper's method) are byte-identical in both culture-only holdouts (`amfsplit gate0`). Still to come: the LSU-removal and genus rounds, LongGloDB, EUKARYOME |
+| `gate0`: frozen naming method and per-copy parity | Gate 0a (nearest-reference LSU arm) and Gate 0b steps 1 and 2 (LSU species clades; species clades plus the ITS distance rule N6, the paper's method) are byte-identical in both culture-only holdouts (`amfsplit gate0`), and so are all 52 LSU-removal and genus rounds of amf-novelty-benchmark 0.3.2, 208 per-sequence tables (`--benchmark` or `AMFSPLIT_BENCHMARK` pointing at that checkout). Still to come: LongGloDB, EUKARYOME |
 | `name`: production user-facing VT, SH and LSU naming workflow | Next; depends on Gate 0 and reference-search input wiring |
 | `db`: references built from the user's downloads, checked by checksum | To do |
 

@@ -1080,6 +1080,210 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
     Ok(Gate0Report { policy:policy.into(),reference_fingerprint:data.ref_fingerprint,evidence_hashes,modes })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Gate 0b, the remaining rounds: the LSU-removal test (protocol v2) of amf-novelty-benchmark.
+// Each of the 52 rounds of holdout_plan.json withholds a species or genus from the culture
+// reference (and, where present, from V18), names its sequences with the species-clade arm, applies
+// the ITS distance rule (N6), and is compared with the four per-sequence tables that release 0.3.2
+// archives under benchmarks/m4_external_holdout/rounds/<key>/06_evaluation_v2/. The "full_reference"
+// tables use the frozen full-V18 placement; "external_holdout" uses the round's own placement.
+
+const HOLDOUT_PLAN_SHA: &str = "69528b1a3f0a65521ba2cb07c0e93d481ee02483cf84c1ed206d96779c92db21";
+const ROUNDS_MANIFEST_SHA: &str = "7de5b6c0cb6575792d2cd0eec84bea753b05df01896f0a677d32d8faa467c2f0";
+
+#[derive(Clone, Debug)]
+pub struct TableReport {
+    pub table: String,
+    pub rows: usize,
+    pub byte_identical: bool,
+    pub differing_cells: usize,
+    pub first_differences: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoundReport {
+    pub key: String,
+    pub tables: Vec<TableReport>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RoundsReport {
+    pub plan_sha: String,
+    pub rounds: Vec<RoundReport>,
+}
+
+impl RoundsReport {
+    pub fn passed(&self) -> bool {
+        !self.rounds.is_empty() && self.rounds.iter().all(|r| r.tables.iter().all(|t| t.byte_identical && t.differing_cells == 0))
+    }
+    pub fn summary(&self) -> String {
+        let mut s = format!("LSU-removal rounds; holdout plan {}\n", self.plan_sha);
+        let (mut tables, mut ok, mut rows) = (0usize, 0usize, 0usize);
+        for r in &self.rounds {
+            for t in &r.tables {
+                tables += 1;
+                rows += t.rows;
+                if t.byte_identical && t.differing_cells == 0 { ok += 1; continue; }
+                s.push_str(&format!("{} {}: {} rows; byte-identical={}; differing cells={}\n", r.key, t.table, t.rows, t.byte_identical, t.differing_cells));
+                for d in &t.first_differences { s.push_str("  "); s.push_str(d); s.push('\n'); }
+            }
+        }
+        let species = self.rounds.iter().filter(|r| r.key.starts_with("species_")).count();
+        s.push_str(&format!("{} rounds ({} species, {} genus); {}/{} per-sequence tables byte-identical ({} rows)\n",
+            self.rounds.len(), species, self.rounds.len() - species, ok, tables, rows));
+        s.push_str(if self.passed() {
+            "GATE 0b, LSU-removal and genus rounds (species clades plus N6): PASS (exact archived per-round output parity)\n"
+        } else {
+            "GATE 0b, LSU-removal and genus rounds: FAIL (see differences above)\n"
+        });
+        s
+    }
+}
+
+/// The frozen runner's genus columns (external_holdout.py `infer`, external_holdout_v2.py `genus_fields`).
+fn genus_fields(data: &FrozenData, row: &mut Row) -> Result<()> {
+    let tokens: StringSet = row_value(row, "placement")?.split(';').filter(|p| !p.is_empty())
+        .filter_map(|p| p.split_whitespace().next()).map(normalise_genus).collect();
+    let culture = row_value(row, "culture")?.to_owned();
+    let genus = data.genus.get(&culture).ok_or_else(|| anyhow!("no genus for culture {culture}"))?;
+    let compatible = tokens.contains(genus);
+    row.insert("final_genus_call".into(), if tokens.is_empty() { "0" } else { "1" }.into());
+    row.insert("final_genus_compatible".into(), if compatible { "1" } else { "0" }.into());
+    Ok(())
+}
+
+/// One round, one placement: the version 1 rows of external_holdout.py `infer`.
+fn name_round(data: &FrozenData, trainers: &BTreeMap<String, Trainer>, placements: &BTreeMap<String, Row>,
+              drop: &StringSet, training: &StringSet, query_ids: &[String]) -> Result<Vec<Row>> {
+    if placements.len() != data.copies.len() || placements.keys().any(|x| !data.copies.contains_key(x)) {
+        bail!("every training and query copy needs a round-specific placement");
+    }
+    for r in placements.values() {
+        let mass: f64 = row_value(r, "credible_mass_target")?.parse()?;
+        if mass != 0.95 { bail!("compatible mass differs from the frozen 0.95"); }
+    }
+    let psets = species_clade_sets(data, placements)?;
+    let mut fits: BTreeMap<String, Fit> = ["VT", "SH"].iter()
+        .map(|arm| Ok(((*arm).to_owned(), trainers[*arm].fit(data, training)?))).collect::<Result<_>>()?;
+    fits.insert("LSU".into(), placement_fit(data, training, &psets));
+    if fits["LSU"].holders.values().any(|h| h.iter().any(|c| drop.contains(c))) { bail!("held-out culture leaked into LSU holders"); }
+    let mut reconciliation = BTreeMap::new();
+    for x in query_ids { reconciliation.insert(x.clone(), reconcile(data, x, &fits, drop)?); }
+    let mut rows = Vec::with_capacity(query_ids.len());
+    for novelty in evaluate_novelty(data, query_ids, &fits, drop, &reconciliation)? {
+        let x = row_value(&novelty, "accession")?.to_owned();
+        let mut row = reconciliation.get(&x).cloned().ok_or_else(|| anyhow!("missing reconciliation for {x}"))?;
+        row.extend(novelty);
+        let p = placements.get(&x).ok_or_else(|| anyhow!("missing placement for {x}"))?;
+        for k in ["best_edge_lwr", "credible_edge_count", "best_pendant_length", "retained_fraction", "external_species_clade",
+                  "external_species_clade_mass", "external_genus_clade", "external_genus_clade_mass"] {
+            row.insert(format!("lsu_{k}"), row_value(p, k)?.to_owned());
+        }
+        row.insert("held_cultures".into(), join_set(drop, ";"));
+        let culture = row_value(&row, "culture")?.to_owned();
+        let genus = data.genus.get(&culture).ok_or_else(|| anyhow!("no genus for culture {culture}"))?;
+        let present = training.iter().any(|c| data.genus.get(c) == Some(genus));
+        row.insert("training_genus_present".into(), if present { "1" } else { "0" }.into());
+        genus_fields(data, &mut row)?;
+        rows.push(row);
+    }
+    rows.sort_by(|a, b| a.get("accession").cmp(&b.get("accession")));
+    Ok(rows)
+}
+
+fn compare_table(expected_path: &Path, results: &[Row], table: &str) -> Result<TableReport> {
+    let expected_bytes = fs::read(expected_path)?;
+    let expected = read_table(expected_path)?;
+    let expected_by_id = read_row_map(&expected);
+    let actual_by_id = read_row_map(&Table { headers: expected.headers.clone(), rows: results.to_vec() });
+    let mut diffs = Vec::new();
+    let mut differing_cells = expected_by_id.len().abs_diff(actual_by_id.len());
+    for (x, exp) in &expected_by_id {
+        let Some(act) = actual_by_id.get(x) else {
+            differing_cells += 1;
+            if diffs.len() < 6 { diffs.push(format!("{x}: missing output row")); }
+            continue;
+        };
+        for h in &expected.headers {
+            let a = act.get(h).map(String::as_str).unwrap_or("");
+            let e = exp.get(h).map(String::as_str).unwrap_or("");
+            if a != e {
+                differing_cells += 1;
+                if diffs.len() < 6 { diffs.push(format!("{x} [{h}]: got {a:?}; expected {e:?}")); }
+            }
+        }
+    }
+    let byte_identical = serialize_table(&expected.headers, results) == expected_bytes;
+    if !byte_identical && differing_cells == 0 && diffs.len() < 6 {
+        diffs.push("per-cell output matched but TSV serialization did not".into());
+    }
+    Ok(TableReport { table: table.into(), rows: results.len(), byte_identical, differing_cells, first_differences: diffs })
+}
+
+/// Gate 0b, remaining rounds. `benchmark_dir` is an amf-novelty-benchmark checkout (release 0.3.2 or
+/// later); `only` keeps the rounds whose key starts with it. Every file read is checked against the
+/// pinned holdout plan and rounds/MANIFEST.json.
+pub fn run_gate0b_rounds(fixture_dir: impl AsRef<Path>, benchmark_dir: impl AsRef<Path>, only: Option<&str>) -> Result<RoundsReport> {
+    let fixture_dir = fixture_dir.as_ref();
+    let m4 = benchmark_dir.as_ref().join("benchmarks/m4_external_holdout");
+    let plan_path = m4.join("holdout_plan.json");
+    let plan_sha = sha256_file(&plan_path)?;
+    if plan_sha != HOLDOUT_PLAN_SHA { bail!("holdout_plan.json hash mismatch: {plan_sha}"); }
+    let manifest_path = m4.join("rounds/MANIFEST.json");
+    let manifest_sha = sha256_file(&manifest_path)?;
+    if manifest_sha != ROUNDS_MANIFEST_SHA { bail!("rounds/MANIFEST.json hash mismatch: {manifest_sha}"); }
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let plan: Value = serde_json::from_str(&fs::read_to_string(&plan_path)?)?;
+
+    let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
+    let trainers: BTreeMap<String, Trainer> = ["VT", "SH"].iter()
+        .map(|arm| Ok(((*arm).to_owned(), Trainer::new(&data, arm)?))).collect::<Result<_>>()?;
+    let frozen_path = fixture_dir.join("placement/lsu_placements.copies.tsv");
+    let frozen_sha = sha256_file(&frozen_path)?;
+    if frozen_sha != "1de103b6ae45f0372dda9ab0799230c4d1243cb98add943e5bab67785e5e910d" {
+        bail!("frozen LSU placement annotation hash mismatch: {frozen_sha}");
+    }
+    let frozen = read_row_map(&read_table(&frozen_path)?);
+    let mut its_rule = n6_its::ItsRule::new(&data)?;
+
+    let folds = plan.get("folds").and_then(Value::as_array).ok_or_else(|| anyhow!("holdout_plan.json has no folds"))?;
+    let mut rounds = Vec::new();
+    for fold in folds {
+        let key = get_string(fold, "key")?.to_owned();
+        if only.is_some_and(|o| !key.starts_with(o)) { continue; }
+        let strings = |field: &str| -> Result<Vec<String>> {
+            fold.get(field).and_then(Value::as_array).ok_or_else(|| anyhow!("{key}: no {field}"))?
+                .iter().map(|v| v.as_str().map(str::to_owned).ok_or_else(|| anyhow!("{key}: {field} holds a non-string"))).collect()
+        };
+        let drop: StringSet = strings("held_cultures")?.into_iter().collect();
+        let query_ids = strings("query_ids")?;
+        let own_placement = !strings("removed_ref_ids")?.is_empty();
+        let training: StringSet = data.cultures.keys().filter(|c| !drop.contains(*c)).cloned().collect();
+        let files = manifest.pointer(&format!("/rounds/{key}/files")).ok_or_else(|| anyhow!("{key} is not in rounds/MANIFEST.json"))?;
+        let checked = |rel: &str| -> Result<PathBuf> {
+            let path = m4.join("rounds").join(&key).join(rel);
+            let expected = files.get(rel).and_then(Value::as_str).ok_or_else(|| anyhow!("{key}/{rel} is not in the manifest"))?;
+            let actual = sha256_file(&path)?;
+            if actual != expected { bail!("{key}/{rel} hash mismatch: {actual}"); }
+            Ok(path)
+        };
+        let own = if own_placement { Some(read_row_map(&read_table(&checked("05_summary/lsu_placements.copies.tsv")?)?)) } else { None };
+        let mut tables = Vec::new();
+        for (name, placements) in [("full_reference", &frozen), ("external_holdout", own.as_ref().unwrap_or(&frozen))] {
+            let v1 = name_round(&data, &trainers, placements, &drop, &training, &query_ids)?;
+            let before: BTreeMap<String, Row> = v1.iter().map(|r| Ok((row_value(r, "accession")?.to_owned(), r.clone()))).collect::<Result<_>>()?;
+            let mut v2 = v1.clone();
+            its_rule.apply(&data, &mut v2, &before, &training, n6_its::Pool::All, 99)?;
+            for r in v2.iter_mut() { genus_fields(&data, r)?; }
+            tables.push(compare_table(&checked(&format!("06_evaluation_v2/{name}_v1.copies.tsv"))?, &v1, &format!("{name}_v1"))?);
+            tables.push(compare_table(&checked(&format!("06_evaluation_v2/{name}_v2.copies.tsv"))?, &v2, &format!("{name}_v2"))?);
+        }
+        rounds.push(RoundReport { key, tables });
+    }
+    if rounds.is_empty() { bail!("no round matched {only:?}"); }
+    Ok(RoundsReport { plan_sha, rounds })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1134,6 +1338,19 @@ mod tests {
     fn frozen_m2b_species_clade_rows_match_every_golden_cell() {
         let report=run_gate0b_species_clades(fixture()).unwrap_or_else(|e|panic!("loading/running the Gate 0b species-clade data failed: {e:#}"));
         assert!(report.passed(),"{}",report.summary());
+    }
+
+    #[test]
+    fn lsu_removal_and_genus_rounds_match_release_0_3_2() {
+        let bench = match std::env::var("AMFSPLIT_BENCHMARK") {
+            Ok(b) if !b.is_empty() => b,
+            _ => {
+                eprintln!("SKIPPED LSU-removal rounds: set AMFSPLIT_BENCHMARK to an amf-novelty-benchmark checkout (release 0.3.2 or later)");
+                return;
+            }
+        };
+        let report = run_gate0b_rounds(fixture(), &bench, None).unwrap_or_else(|e| panic!("running the LSU-removal rounds failed: {e:#}"));
+        assert!(report.passed(), "{}", report.summary());
     }
 
     #[test]
