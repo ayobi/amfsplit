@@ -106,8 +106,8 @@ struct Gate0Args {
     /// Which method to check: baseline (Gate 0a), species-clades (Gate 0b step 1), n6 (species
     /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2), rounds (the 52
     /// LSU-removal and genus rounds; needs --benchmark), lgdb (the LongGloDB test; needs
-    /// --benchmark and --lgdb) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "all"])]
+    /// --benchmark and --lgdb), euk (the EUKARYOME test; needs --benchmark and --euk) or all.
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "euk", "all"])]
     policy: String,
     /// amf-novelty-benchmark checkout holding the archived rounds (release 0.3.2 or later);
     /// defaults to $AMFSPLIT_BENCHMARK.
@@ -120,6 +120,10 @@ struct Gate0Args {
     /// defaults to $AMFSPLIT_LGDB. Used with --benchmark.
     #[arg(long)]
     lgdb: Option<PathBuf>,
+    /// Folder with the four EUKARYOME test windows (overlap.win.*.fasta); defaults to $AMFSPLIT_EUK.
+    /// Used with --benchmark.
+    #[arg(long)]
+    euk: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -351,6 +355,20 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
             }
             _ if a.policy == "lgdb" => anyhow::bail!("--policy lgdb needs --benchmark and --lgdb (or AMFSPLIT_BENCHMARK and AMFSPLIT_LGDB)"),
             _ => println!("LongGloDB: SKIPPED (needs --benchmark and --lgdb, or AMFSPLIT_BENCHMARK and AMFSPLIT_LGDB)"),
+        }
+    }
+    if matches!(a.policy.as_str(), "euk" | "all") {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let bench = a.benchmark.clone().or_else(|| env("AMFSPLIT_BENCHMARK"));
+        let euk = a.euk.clone().or_else(|| env("AMFSPLIT_EUK"));
+        match (bench, euk) {
+            (Some(b), Some(e)) => {
+                let report = amfsplit_naming::run_gate0b_euk(&fixtures, &b, &e)?;
+                print!("{}", report.summary());
+                passed &= report.passed();
+            }
+            _ if a.policy == "euk" => anyhow::bail!("--policy euk needs --benchmark and --euk (or AMFSPLIT_BENCHMARK and AMFSPLIT_EUK)"),
+            _ => println!("EUKARYOME: SKIPPED (needs --benchmark and --euk, or AMFSPLIT_BENCHMARK and AMFSPLIT_EUK)"),
         }
     }
     if !passed {

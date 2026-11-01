@@ -48,6 +48,18 @@ impl ItsRule {
     /// sort accessions, calculate each unordered pair once, and store the
     /// resulting distance symmetrically.
     pub(super) fn new(data: &FrozenData) -> Result<Self> {
+        Self::build(data, None)
+    }
+
+    /// The same cache without the pairs whose two copies both belong to `held` cultures. Every call
+    /// that holds those cultures out reads none of these pairs (the threshold and the nearest culture
+    /// look at training cultures only), so its outputs are unchanged; external tests use it to skip
+    /// the millions of distances between their own test sequences.
+    pub(super) fn new_skipping_held_pairs(data: &FrozenData, held: &StringSet) -> Result<Self> {
+        Self::build(data, Some(held))
+    }
+
+    fn build(data: &FrozenData, held: Option<&StringSet>) -> Result<Self> {
         let its = data
             .fa
             .get("full_its")
@@ -76,7 +88,11 @@ impl ItsRule {
             let x = its_ok[i];
             let seq_x = &its[x.as_str()];
 
+            let x_held = held.is_some_and(|h| h.contains(&data.copies[x.as_str()].culture));
             for y in its_ok.iter().skip(i + 1) {
+                if x_held && held.is_some_and(|h| h.contains(&data.copies[y.as_str()].culture)) {
+                    continue;
+                }
                 let seq_y = &its[y.as_str()];
 
                 // Preserve Python's argument order: dist(its[x], its[y]).

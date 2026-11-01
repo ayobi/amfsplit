@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod n6_its;
-mod lgdb;
-pub use lgdb::{run_gate0b_lgdb, LgdbReport};
+mod external;
+pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
@@ -33,7 +33,16 @@ struct Table {
 
 fn read_table(path: &Path) -> Result<Table> {
     let text = fs::read_to_string(path).with_context(|| format!("reading TSV {}", path.display()))?;
-    let parsed = read_tsv_rows(&text);
+    table_from_text(&text, path)
+}
+
+/// A TSV table, plain or gzip-compressed (`.tsv.gz`).
+fn read_table_any(path: &Path) -> Result<Table> {
+    table_from_text(&read_text_maybe_gzip(path)?, path)
+}
+
+fn table_from_text(text: &str, path: &Path) -> Result<Table> {
+    let parsed = read_tsv_rows(text);
     if parsed.is_empty() {
         bail!("TSV has no header: {}", path.display());
     }
@@ -1194,8 +1203,9 @@ fn name_round(data: &FrozenData, trainers: &BTreeMap<String, Trainer>, placement
 }
 
 fn compare_table(expected_path: &Path, results: &[Row], table: &str) -> Result<TableReport> {
-    let expected_bytes = fs::read(expected_path)?;
-    let expected = read_table(expected_path)?;
+    let text = read_text_maybe_gzip(expected_path)?;
+    let expected_bytes = text.as_bytes().to_vec();
+    let expected = table_from_text(&text, expected_path)?;
     let expected_by_id = read_row_map(&expected);
     let actual_by_id = read_row_map(&Table { headers: expected.headers.clone(), rows: results.to_vec() });
     let mut diffs = Vec::new();
@@ -1352,6 +1362,17 @@ mod tests {
             }
         };
         let report = run_gate0b_rounds(fixture(), &bench, None).unwrap_or_else(|e| panic!("running the LSU-removal rounds failed: {e:#}"));
+        assert!(report.passed(), "{}", report.summary());
+    }
+
+    #[test]
+    fn eukaryome_test_matches_the_published_run() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED EUKARYOME: set AMFSPLIT_BENCHMARK and AMFSPLIT_EUK (the local EUKARYOME test windows)");
+            return;
+        };
+        let report = run_gate0b_euk(fixture(), &bench, &euk).unwrap_or_else(|e| panic!("running the EUKARYOME test failed: {e:#}"));
         assert!(report.passed(), "{}", report.summary());
     }
 
