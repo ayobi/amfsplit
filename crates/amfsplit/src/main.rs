@@ -103,8 +103,9 @@ struct Gate0Args {
     /// Frozen naming parity fixture directory (defaults to this checkout's parity/naming).
     #[arg(long)]
     fixtures: Option<PathBuf>,
-    /// Which LSU arm to check: baseline (Gate 0a), species-clades (Gate 0b step 1) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "all"])]
+    /// Which method to check: baseline (Gate 0a), species-clades (Gate 0b step 1), n6 (species
+    /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2) or all.
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "all"])]
     policy: String,
 }
 
@@ -305,6 +306,11 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
     }
     if matches!(a.policy.as_str(), "species-clades" | "all") {
         let report = amfsplit_naming::run_gate0b_species_clades(&fixtures)?;
+        print!("{}", report.summary());
+        passed &= report.passed();
+    }
+    if matches!(a.policy.as_str(), "n6" | "all") {
+        let report = amfsplit_naming::run_gate0b_n6(&fixtures)?;
         print!("{}", report.summary());
         passed &= report.passed();
     }

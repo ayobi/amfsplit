@@ -965,6 +965,7 @@ impl Gate0Report {
         let gate = match self.policy.as_str() {
             "baseline" => "GATE 0a, nearest-reference LSU arm",
             "epa_species_clades" => "GATE 0b, LSU species-clade arm",
+            "epa_species_clades_n6" => "GATE 0b, LSU species clades plus the ITS distance rule (N6)",
             _ => "GATE 0",
         };
         s.push_str(&if self.passed(){format!("{gate}: PASS (exact archived per-copy output parity)\n")}else{format!("{gate}: FAIL (see per-copy differences above)\n")});
@@ -984,8 +985,15 @@ pub fn run_gate0b_species_clades(fixture_dir: impl AsRef<Path>) -> Result<Gate0R
     run_policy(fixture_dir.as_ref(), "epa_species_clades")
 }
 
+/// Gate 0b, step 2: species clades plus the ITS distance rule (N6; pool `all`, 99th percentile), fitted
+/// on each fold's training cultures, against `epa_species_clades_n6_*` goldens written by the frozen
+/// Python rule (`parity/naming/scripts/make_n6_golden.py`). This is the method of the paper.
+pub fn run_gate0b_n6(fixture_dir: impl AsRef<Path>) -> Result<Gate0Report> {
+    run_policy(fixture_dir.as_ref(), "epa_species_clades_n6")
+}
+
 fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
-    if !matches!(policy, "baseline" | "epa_species_clades") { bail!("unknown naming policy {policy}"); }
+    if !matches!(policy, "baseline" | "epa_species_clades" | "epa_species_clades_n6") { bail!("unknown naming policy {policy}"); }
     let input_dir=fixture_dir.join("inputs/benchmark");
     let data=FrozenData::load(&input_dir)?;
     let trainers:BTreeMap<String,Trainer>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),Trainer::new(&data,arm)?))).collect::<Result<_>>()?;
@@ -997,7 +1005,8 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
     let placement_table=read_table(&placement_path)?;
     let placements=read_row_map(&placement_table);
     if placements.len()!=data.copies.len() || placements.keys().any(|x|!data.copies.contains_key(x)) { bail!("LSU placement IDs differ from the 903-copy culture reference"); }
-    let psets = if policy == "epa_species_clades" { Some(species_clade_sets(&data, &placements)?) } else { None };
+    let psets = if policy.starts_with("epa_species_clades") { Some(species_clade_sets(&data, &placements)?) } else { None };
+    let mut its_rule = if policy == "epa_species_clades_n6" { Some(n6_its::ItsRule::new(&data)?) } else { None };
     let mut modes=Vec::new();
     for mode in ["physical_culture","physical_species"] {
         let mut results=Vec::with_capacity(data.copies.len());
@@ -1011,19 +1020,28 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
             let mut reconciliation=BTreeMap::new();
             for x in query_ids { reconciliation.insert(x.clone(),reconcile(&data,x,&fits,drop)?); }
             let novelties=evaluate_novelty(&data,query_ids,&fits,drop,&reconciliation)?;
+            let mut fold_rows:Vec<Row>=Vec::with_capacity(query_ids.len());
             for novelty in novelties {
                 let x=row_value(&novelty,"accession")?.to_owned();
                 let mut row=reconciliation.get(&x).cloned().ok_or_else(||anyhow!("missing reconciliation for {x}"))?;
                 row.extend(novelty);
-                row.insert("policy".into(),policy.into());
+                // N6 post-processes the species-clade rows; as in the frozen Python, the row keeps
+                // the M2b policy name and the rule is recorded in its own its_* columns
+                row.insert("policy".into(),(if policy=="epa_species_clades_n6" {"epa_species_clades"} else {policy}).into());
                 row.insert("mode".into(),mode.into());
                 row.insert("held_cultures".into(),join_set(drop,";"));
                 let p=placements.get(&x).ok_or_else(||anyhow!("missing placement annotation for {x}"))?;
                 for k in ["best_edge_lwr","credible_edge_count","best_pendant_length","retained_fraction","external_species_clade","external_species_clade_mass","external_genus_clade","external_genus_clade_mass"] {
                     row.insert(format!("lsu_{k}"),row_value(p,k)?.to_owned());
                 }
-                results.push(row);
+                fold_rows.push(row);
             }
+            if let Some(rule)=its_rule.as_mut() {
+                // as score_v2: the rule reads each row's original genus call from an untouched copy
+                let before:BTreeMap<String,Row>=fold_rows.iter().map(|r|Ok((row_value(r,"accession")?.to_owned(),r.clone()))).collect::<Result<_>>()?;
+                rule.apply(&data,&mut fold_rows,&before,&training,n6_its::Pool::All,99)?;
+            }
+            results.extend(fold_rows);
         }
         results.sort_by(|a,b|a.get("accession").cmp(&b.get("accession")));
         if results.len()!=data.copies.len() { bail!("{mode} produced {} per-copy results, expected {}",results.len(),data.copies.len()); }
@@ -1033,6 +1051,8 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
             ("baseline", "physical_species") => "906420d70e9d8d24ab5b115ecd63e72451c396b4f1e7c60cfccf7b8d6a8a0800",
             ("epa_species_clades", "physical_culture") => "a357b563a5def31932085dabe4697f3b49e0f586d56a6c91acefe8bb1cb7cfd4",
             ("epa_species_clades", "physical_species") => "9b0d4ba422214a763cbf0c5949f8f7b2b163fdfcd8e2fd5ebf81a55db521a53a",
+            ("epa_species_clades_n6", "physical_culture") => "5fb5872c073ee7f14cdb27b7f7fa7e1344524826b78d1be36a86f38d644a468c",
+            ("epa_species_clades_n6", "physical_species") => "272b0fbe70859c647fc10f3c80afd26d266455420bfb39bbd56cfd0965c8bbda",
             _ => unreachable!("policy and mode are checked above"),
         };
         let actual_golden_sha = sha256_file(&expected_path)?;
@@ -1113,6 +1133,12 @@ mod tests {
     #[test]
     fn frozen_m2b_species_clade_rows_match_every_golden_cell() {
         let report=run_gate0b_species_clades(fixture()).unwrap_or_else(|e|panic!("loading/running the Gate 0b species-clade data failed: {e:#}"));
+        assert!(report.passed(),"{}",report.summary());
+    }
+
+    #[test]
+    fn frozen_species_clade_n6_rows_match_every_golden_cell() {
+        let report=run_gate0b_n6(fixture()).unwrap_or_else(|e|panic!("loading/running the Gate 0b N6 data failed: {e:#}"));
         assert!(report.passed(),"{}",report.summary());
     }
 }
