@@ -4,6 +4,8 @@
 **Scope:** linked long-read AMF assignments using MaarjAM VT (SSU), UNITE SH (ITS), and LSU phylogenetic evidence.  
 **Non-goal:** establishing or formally naming new fungal taxa. AMFSplit can nominate candidates for expert/taxonomic follow-up; sequence evidence alone does not establish a new species.
 
+> **Note, 1 November 2026.** This draft predates the paper's final method. Release 0.3.1 names sequences with LSU species clades plus the ITS distance rule (N6), and Gate 0b reproduces that method byte for byte. Where the text below treats species clades as experimental, it describes the M2b development stage. Its single-marker novelty flag is R8 in Protocol v3, and its split of assignment, novelty state and flags is the planned output of `amfsplit name`.
+
 ## 1. Why this specification exists
 
 AMFSplit now has a frozen reproducibility baseline. The Rust M2b naming port passed byte-identical parity for the physical-culture and species-holdout golden outputs, and the independently rebuilt LSU placement workflow reproduced all pinned reference artifacts plus every cell of all 903 query rows. Those results establish reproducibility of the implementation and placement pipeline, not the biological validity of every novelty interpretation.

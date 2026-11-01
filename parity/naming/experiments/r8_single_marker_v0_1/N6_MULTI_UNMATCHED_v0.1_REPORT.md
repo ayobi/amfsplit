@@ -1,5 +1,7 @@
 # N6 multi-unmatched evidence gate: exploratory ablation v0.1
 
+> **Note, 1 November 2026.** This rule is R8 in Protocol v3. "N6" in this report predates the rename and is not the ITS distance rule.
+
 **Date:** 20 October 2026  
 **Status:** Development-only experiment; not production behaviour and not a validated biological novelty classifier.  
 **Frozen baseline:** M2b Phase 4 reconciliation and novelty outputs; left unchanged.

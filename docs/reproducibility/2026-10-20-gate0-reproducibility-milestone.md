@@ -6,6 +6,8 @@
 **Project checkout:** `~/projects/amfsplit`  
 **Last known implementation commit:** `a827275` — `Add Rust frozen M2b naming parity gate`
 
+> **Note, 1 November 2026.** The PASS above is Gate 0a, the nearest-reference LSU arm, in both holdouts. The paper's method, LSU species clades plus the ITS distance rule (N6), is Gate 0b. It passed byte for byte on 26 October (step 1) and 1 November (step 2); see the README status table.
+
 ---
 
 ## 1. Executive summary

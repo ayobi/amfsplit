@@ -2,6 +2,8 @@
 
 **Date:** 19 October 2026
 
+> **Note, 1 November 2026.** A historical record of the first wiring. For the current gate status (Gate 0a and Gate 0b steps 1 and 2, all byte-identical), see the README.
+
 ## Verified frozen evidence and reference
 
 The uploaded evidence ZIP has exactly four members (`MANIFEST.json` and the VT, SH and LSU compressed evidence files). The four SHA-256 hashes match the frozen M2b lock exactly. The manifest identifies reference fingerprint `181938d695f3df40`.

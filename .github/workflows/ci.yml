@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Tests and frozen naming gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The validate parity case needs vsearch 2.27.0 and the V18 database, which are not stored
+      # in the repository; without AMFSPLIT_TEST_VSEARCH and AMFSPLIT_TEST_V18 it reports SKIPPED.
+      - name: Tests (Stage 1, triage and every naming gate)
+        run: cargo test --release --locked
+      - name: Gate 0 summary
+        run: cargo run --release --locked -- gate0
+
+  python-reference:
+    name: Frozen Python rule regenerates the N6 goldens
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install edlib==1.3.9.post1 biopython==1.88
+      - run: python3 parity/naming/scripts/make_n6_golden.py
+      - name: Goldens unchanged
+        run: git diff --exit-code -- parity/naming/golden
