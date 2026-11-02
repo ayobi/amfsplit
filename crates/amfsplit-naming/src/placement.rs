@@ -221,7 +221,7 @@ pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, alig
 /// EPA-ng's list, and EPA-ng does not list tied placements in the same order on every run.
 pub type TopTies = BTreeMap<String, BTreeSet<usize>>;
 
-fn summarize_with_ties(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<(Vec<Row>, TopTies)> {
+pub(crate) fn summarize_with_ties(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<(Vec<Row>, TopTies)> {
     let meta: BTreeMap<String, Row> = read_table(metadata)?.rows.into_iter()
         .map(|r| Ok((row_value(&r, "ref_id")?.to_owned(), r))).collect::<Result<_>>()?;
     let data: Value = serde_json::from_str(&fs::read_to_string(jplace).with_context(|| format!("reading {}", jplace.display()))?)?;

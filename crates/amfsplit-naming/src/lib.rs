@@ -13,6 +13,8 @@ mod n6_its;
 mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 mod evidence;
+mod gate3;
+pub use gate3::{run_gate3, Gate3Options, Gate3Report};
 pub use evidence::{load_reference, reduce_hits, run_blast, run_evidence_parity, EvidenceReport, DATABASE_PINS, EVIDENCE_ARMS};
 mod placement;
 pub use placement::{compare_up_to_ties, placement_tsv, run_place, run_placement_parity, summarize_placements, PlaceOptions, PlaceReport, PlacementReport, TableMatch, TopTies, FROZEN_QUERIES_SHA, FROZEN_TABLE_SHA, PLACEMENT_HEADERS, REFERENCE_PINS};
@@ -1011,7 +1013,6 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
     if !matches!(policy, "baseline" | "epa_species_clades" | "epa_species_clades_n6") { bail!("unknown naming policy {policy}"); }
     let input_dir=fixture_dir.join("inputs/benchmark");
     let data=FrozenData::load(&input_dir)?;
-    let trainers:BTreeMap<String,Trainer>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),Trainer::new(&data,arm)?))).collect::<Result<_>>()?;
     let placement_path=fixture_dir.join("placement/lsu_placements.copies.tsv");
     let placement_sha=sha256_file(&placement_path)?;
     if placement_sha != "1de103b6ae45f0372dda9ab0799230c4d1243cb98add943e5bab67785e5e910d" {
@@ -1019,6 +1020,14 @@ fn run_policy(fixture_dir: &Path, policy: &str) -> Result<Gate0Report> {
     }
     let placement_table=read_table(&placement_path)?;
     let placements=read_row_map(&placement_table);
+    run_policy_on(fixture_dir, policy, data, placements)
+}
+
+/// The naming of both culture-only holdouts on given data and placements (frozen, or rebuilt by
+/// Gate 3), compared with the policy's goldens.
+fn run_policy_on(fixture_dir: &Path, policy: &str, data: FrozenData, placements: BTreeMap<String, Row>) -> Result<Gate0Report> {
+    let input_dir=fixture_dir.join("inputs/benchmark");
+    let trainers:BTreeMap<String,Trainer>=ARM_NAMES.iter().map(|arm|Ok(((*arm).to_owned(),Trainer::new(&data,arm)?))).collect::<Result<_>>()?;
     if placements.len()!=data.copies.len() || placements.keys().any(|x|!data.copies.contains_key(x)) { bail!("LSU placement IDs differ from the 903-copy culture reference"); }
     let psets = if policy.starts_with("epa_species_clades") { Some(species_clade_sets(&data, &placements)?) } else { None };
     let mut its_rule = if policy == "epa_species_clades_n6" { Some(n6_its::ItsRule::new(&data)?) } else { None };

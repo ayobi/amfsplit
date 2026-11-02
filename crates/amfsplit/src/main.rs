@@ -45,6 +45,57 @@ enum Command {
     /// Place LSU windows on the frozen V18 reference: MAFFT --addfragments, EPA-ng, then the
     /// placement summary, with the frozen arguments and thread counts.
     Place(PlaceArgs),
+    /// Gate 3: the paper's calls (both culture-only holdouts, species clades plus N6) from the tool's
+    /// own BLAST evidence and EPA-ng placements instead of the frozen files.
+    Gate3(Gate3Args),
+}
+
+#[derive(Args)]
+struct Gate3Args {
+    /// MaarjAM FASTA (VT); defaults to $AMFSPLIT_MAARJAM
+    #[arg(long)]
+    maarjam: Option<PathBuf>,
+    /// UNITE general FASTA release 10.0, 19 February 2025 (SH); defaults to $AMFSPLIT_UNITE
+    #[arg(long)]
+    unite: Option<PathBuf>,
+    /// V18 AMF-only LSU FASTA (LSU evidence); defaults to $AMFSPLIT_V18
+    #[arg(long)]
+    v18: Option<PathBuf>,
+    /// Frozen V18 reference folder for the placements (reference.aligned.fasta, fit.raxml.bestTree,
+    /// fit.raxml.bestModel, reference_metadata.tsv); defaults to $AMFSPLIT_V18_REFERENCE
+    #[arg(long)]
+    reference: Option<PathBuf>,
+    /// Work folder; BLAST evidence and placements made here are reused by later runs
+    #[arg(long, default_value = "gate3_work")]
+    work: PathBuf,
+    #[arg(long, default_value_t = 4)]
+    blast_threads: usize,
+    #[arg(long, default_value = "blastn")]
+    blastn: String,
+    #[arg(long, default_value = "makeblastdb")]
+    makeblastdb: String,
+    #[arg(long, default_value = "mafft")]
+    mafft: String,
+    #[arg(long, default_value = "epa-ng")]
+    epa_ng: String,
+}
+
+fn gate3_cmd(a: Gate3Args) -> Result<()> {
+    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let need = |p: Option<PathBuf>, flag: &str, var: &str| p.or_else(|| env(var)).ok_or_else(|| anyhow::anyhow!("gate3 needs --{flag} (or {var})"));
+    let databases: std::collections::BTreeMap<String, PathBuf> = [
+        ("VT".to_owned(), need(a.maarjam, "maarjam", "AMFSPLIT_MAARJAM")?),
+        ("SH".to_owned(), need(a.unite, "unite", "AMFSPLIT_UNITE")?),
+        ("LSU".to_owned(), need(a.v18, "v18", "AMFSPLIT_V18")?),
+    ].into_iter().collect();
+    let report = amfsplit_naming::run_gate3(&amfsplit_naming::Gate3Options {
+        fixture_dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming"),
+        databases, reference_dir: need(a.reference, "reference", "AMFSPLIT_V18_REFERENCE")?, work: a.work,
+        blast_threads: a.blast_threads, blastn: a.blastn, makeblastdb: a.makeblastdb, mafft: a.mafft, epa_ng: a.epa_ng,
+    })?;
+    print!("{}", report.summary());
+    if !report.passed() { std::process::exit(1); }
+    Ok(())
 }
 
 #[derive(Args)]
@@ -543,6 +594,7 @@ fn main() -> std::process::ExitCode {
         Command::Gate0(a) => gate0_cmd(a),
         Command::PlaceSummary(a) => place_summary_cmd(a),
         Command::Place(a) => place_cmd(a),
+        Command::Gate3(a) => gate3_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

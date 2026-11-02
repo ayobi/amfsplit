@@ -210,14 +210,31 @@ fn base_acc(acc: &str) -> &str { acc.split('.').next().unwrap_or("") }
 /// arm_sets.py `vt_hits`.
 pub fn reduce_hits(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f64, max_ev: f64, min_id: f64,
                    drop: &StringSet) -> Result<(BTreeMap<String, f64>, Option<f64>)> {
-    let mut ids: BTreeMap<String, f64> = BTreeMap::new();
+    let (ids, anchor) = reduce_hits_ordered(hits, refs, min_cov, max_ev, min_id, drop)?;
+    Ok((ids.into_iter().collect(), anchor))
+}
+
+/// The best unit as the frozen culture tables record it (arm_sets.py: `sorted(ids.items(), key=-pident)[0]`):
+/// the top identity, ties to the unit whose first hit comes first in BLAST's output.
+pub(crate) fn first_top(ids: &[(String, f64)]) -> (String, f64) {
+    let max = ids.iter().map(|(_, p)| *p).fold(f64::NEG_INFINITY, f64::max);
+    ids.iter().find(|(_, p)| *p == max).cloned().unwrap_or_else(|| (String::new(), 0.0))
+}
+
+/// `vt_hits` with the units in the order their first passing hit appears (Python dict order).
+pub(crate) fn reduce_hits_ordered(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f64, max_ev: f64, min_id: f64,
+                   drop: &StringSet) -> Result<(Vec<(String, f64)>, Option<f64>)> {
+    let mut ids: Vec<(String, f64)> = Vec::new();
     let mut best: Option<(f64, f64)> = None;
     for h in hits {
         let info = refs.get(&h.reference).ok_or_else(|| anyhow!("BLAST hit on unknown record {}", h.reference))?;
         if drop.contains(base_acc(&info.acc)) { continue; }
         let cov = h.length as f64 / (h.qlen.min(1.max(h.slen - info.n_n))) as f64;
         if cov < min_cov || h.evalue > max_ev { continue; }
-        if h.pident > *ids.get(&info.label).unwrap_or(&-1.0) { ids.insert(info.label.clone(), h.pident); }
+        match ids.iter_mut().find(|(u, _)| *u == info.label) {
+            Some((_, p)) => { if h.pident > *p { *p = h.pident; } }
+            None => { if h.pident > -1.0 { ids.push((info.label.clone(), h.pident)); } }
+        }
         if h.pident >= min_id && best.is_none_or(|b| (h.bitscore, h.pident) > b) { best = Some((h.bitscore, h.pident)); }
     }
     Ok((ids, best.map(|b| b.1)))
@@ -315,4 +332,60 @@ pub fn run_evidence_parity(fixture_dir: impl AsRef<Path>, databases: &BTreeMap<S
         arms.push(ArmEvidenceReport { arm: arm.into(), references: refs.len(), frozen_references, copies: retained.len(), reproduced, first_differences: first });
     }
     Ok(EvidenceReport { arms })
+}
+
+/// Evidence and best units of every retained culture copy, rebuilt with BLAST+ (Gate 3).
+pub(crate) type ArmEvidenceSet = (BTreeMap<String, EvidenceQuery>, BTreeMap<String, (String, f64)>);
+
+pub(crate) fn culture_evidence(fixture_dir: &Path, databases: &BTreeMap<String, PathBuf>, workdir: &Path, threads: usize,
+                               makeblastdb: &str, blastn: &str) -> Result<BTreeMap<String, ArmEvidenceSet>> {
+    let bench = fixture_dir.join("inputs/benchmark");
+    let drop = culture_accessions(fixture_dir)?;
+    let retained: BTreeSet<String> = read_table(&bench.join("ref/copies.tsv"))?.rows.iter()
+        .filter(|r| r.get("status").map(String::as_str) == Some("retained"))
+        .map(|r| Ok(row_value(r, "accession")?.to_owned())).collect::<Result<_>>()?;
+    let mut out = BTreeMap::new();
+    for (arm, kind, region, task, min_id, min_cov) in EVIDENCE_ARMS {
+        let path = databases.get(arm).ok_or_else(|| anyhow!("no database for the {arm} arm"))?;
+        let (refs, fasta, _) = load_reference(path, kind, (kind == "unite").then_some("Glomeromycota"))?;
+        let hits = run_blast(&bench.join(format!("ref/fasta/{region}.fasta")), &fasta, workdir, &arm.to_lowercase(), task, threads, makeblastdb, blastn)?;
+        let (mut queries, mut best) = (BTreeMap::new(), BTreeMap::new());
+        for x in &retained {
+            let (ids, anchor) = reduce_hits_ordered(hits.get(x).map(Vec::as_slice).unwrap_or(&[]), &refs, min_cov, MAX_EVALUE, min_id, &drop)?;
+            best.insert(x.clone(), first_top(&ids));
+            queries.insert(x.clone(), EvidenceQuery { anchor_pident: anchor, unit_pident: ids.into_iter().collect() });
+        }
+        out.insert(arm.to_owned(), (queries, best));
+    }
+    Ok(out)
+}
+
+pub(crate) fn save_evidence(path: &Path, ev: &BTreeMap<String, ArmEvidenceSet>) -> Result<()> {
+    let mut arms = serde_json::Map::new();
+    for (arm, (queries, best)) in ev {
+        let mut qs = serde_json::Map::new();
+        for (x, q) in queries {
+            let (u, p) = &best[x];
+            qs.insert(x.clone(), serde_json::json!({"unit_pident": q.unit_pident, "anchor_pident": q.anchor_pident, "best": [u, p]}));
+        }
+        arms.insert(arm.clone(), Value::Object(qs));
+    }
+    fs::write(path, serde_json::to_string(&Value::Object(arms))?)?;
+    Ok(())
+}
+
+pub(crate) fn load_evidence(path: &Path) -> Result<BTreeMap<String, ArmEvidenceSet>> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let mut out = BTreeMap::new();
+    for (arm, qs) in v.as_object().ok_or_else(|| anyhow!("bad evidence cache"))? {
+        let (mut queries, mut best) = (BTreeMap::new(), BTreeMap::new());
+        for (x, q) in qs.as_object().ok_or_else(|| anyhow!("bad evidence cache"))? {
+            let unit_pident = q["unit_pident"].as_object().ok_or_else(|| anyhow!("bad evidence cache"))?
+                .iter().map(|(u, p)| (u.clone(), p.as_f64().unwrap_or(f64::NAN))).collect();
+            queries.insert(x.clone(), EvidenceQuery { anchor_pident: q["anchor_pident"].as_f64(), unit_pident });
+            best.insert(x.clone(), (q["best"][0].as_str().unwrap_or("").to_owned(), q["best"][1].as_f64().unwrap_or(0.0)));
+        }
+        out.insert(arm.clone(), (queries, best));
+    }
+    Ok(out)
 }
