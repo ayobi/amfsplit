@@ -67,9 +67,17 @@ struct DbArgs {
     /// UNITE general FASTA release 10.0, 19 February 2025 (.gz as downloaded)
     #[arg(long)]
     unite: PathBuf,
-    /// Frozen V18 reference folder (reference.aligned.fasta, fit.raxml.bestTree, fit.raxml.bestModel, reference_metadata.tsv)
+    /// V18 full FASTA as released (V18_LSUDB_052025.fasta, with its outgroups): the reference alignment is
+    /// rebuilt from it exactly as the frozen build did and checked against the pinned one
+    #[arg(long, conflicts_with = "reference")]
+    v18_full: Option<PathBuf>,
+    /// Or an existing frozen V18 reference folder (reference.aligned.fasta, fit.raxml.bestTree,
+    /// fit.raxml.bestModel, reference_metadata.tsv)
     #[arg(long)]
-    reference: PathBuf,
+    reference: Option<PathBuf>,
+    /// MAFFT threads for rebuilding the reference alignment (the result does not depend on it)
+    #[arg(long, default_value_t = 8)]
+    mafft_threads: usize,
     #[arg(long, default_value = "blastn")]
     blastn: String,
     #[arg(long, default_value = "makeblastdb")]
@@ -85,7 +93,8 @@ struct DbArgs {
 
 fn db_cmd(a: DbArgs) -> Result<()> {
     let m = amfsplit_naming::build_db(&amfsplit_naming::DbOptions {
-        out: a.out.clone(), maarjam: a.maarjam, unite: a.unite, reference_dir: a.reference,
+        out: a.out.clone(), maarjam: a.maarjam, unite: a.unite, reference_dir: a.reference, v18_full: a.v18_full,
+        shipped_v18: naming_data().join("v18"), mafft_threads: a.mafft_threads,
         blastn: a.blastn, makeblastdb: a.makeblastdb, mafft: a.mafft, epa_ng: a.epa_ng, allow_unpinned: a.allow_unpinned,
     })?;
     for arm in ["VT", "SH"] {
@@ -127,7 +136,7 @@ struct NameArgs {
 
 fn name_cmd(a: NameArgs) -> Result<()> {
     let r = amfsplit_naming::run_name(&amfsplit_naming::NameOptions {
-        windows: a.windows, db: a.db, out: a.out.clone(), fixture_dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming"),
+        windows: a.windows, db: a.db, out: a.out.clone(), fixture_dir: naming_data(),
         blast_threads: a.blast_threads, epa_threads: a.epa_threads, blastn: a.blastn, mafft: a.mafft, epa_ng: a.epa_ng, compare_with: a.compare_with,
     })?;
     println!("{} sequences named, {} skipped (missing windows); {}", r.named, r.skipped, a.out.join("calls.tsv").display());
@@ -182,7 +191,7 @@ fn gate3_cmd(a: Gate3Args) -> Result<()> {
         ("LSU".to_owned(), need(a.v18, "v18", "AMFSPLIT_V18")?),
     ].into_iter().collect();
     let report = amfsplit_naming::run_gate3(&amfsplit_naming::Gate3Options {
-        fixture_dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming"),
+        fixture_dir: naming_data(),
         databases, reference_dir: need(a.reference, "reference", "AMFSPLIT_V18_REFERENCE")?, work: a.work,
         blast_threads: a.blast_threads, blastn: a.blastn, makeblastdb: a.makeblastdb, mafft: a.mafft, epa_ng: a.epa_ng,
     })?;
@@ -227,7 +236,7 @@ struct PlaceArgs {
 
 fn place_cmd(a: PlaceArgs) -> Result<()> {
     use amfsplit_naming::TableMatch;
-    let frozen_table = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/placement/lsu_placements.copies.tsv");
+    let frozen_table = naming_data().join("placement/lsu_placements.copies.tsv");
     // the frozen table is the default comparison for the frozen query set
     let frozen_queries = std::fs::read(&a.queries).ok()
         .map(|b| { use sha2::{Digest, Sha256}; format!("{:x}", Sha256::digest(&b)) == amfsplit_naming::FROZEN_QUERIES_SHA }).unwrap_or(false);
@@ -276,6 +285,17 @@ struct PlaceSummaryArgs {
     /// Credible mass
     #[arg(long, default_value_t = 0.95)]
     mass: f64,
+}
+
+/// The culture reference and frozen files the naming commands read (the layout of parity/naming):
+/// $AMFSPLIT_DATA if set, else share/amfsplit/naming beside an installed binary, else this checkout.
+fn naming_data() -> PathBuf {
+    if let Some(d) = std::env::var_os("AMFSPLIT_DATA").filter(|v| !v.is_empty()) { return PathBuf::from(d); }
+    if let Some(prefix) = std::env::current_exe().ok().and_then(|e| e.parent().and_then(|b| b.parent()).map(Path::to_path_buf)) {
+        let d = prefix.join("share/amfsplit/naming");
+        if d.join("inputs/benchmark").is_dir() { return d; }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming")
 }
 
 fn place_summary_cmd(a: PlaceSummaryArgs) -> Result<()> {
@@ -579,7 +599,7 @@ fn triage_cmd(a: TriageArgs) -> Result<()> {
 
 fn gate0_cmd(a: Gate0Args) -> Result<()> {
     let fixtures = a.fixtures.unwrap_or_else(|| {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming")
+        naming_data()
     });
     let mut passed = true;
     if matches!(a.policy.as_str(), "baseline" | "all") {

@@ -11,8 +11,53 @@ doi:10.5281/zenodo.23422616.
 
 ## Status
 
-v0.1 in progress. v0.1 ports the paper's frozen method, and it ships only when it reproduces
-release 0.3.1 assignment for assignment.
+v0.1 reproduces the paper's method assignment for assignment: from the stored evidence and
+placements of release 0.3.1 (Gates 0a and 0b), and from its own BLAST+ evidence and EPA-ng
+placements (Gate 3). On the 280 LongGloDB test sequences, `amfsplit name` reproduces the published
+calls end to end. Release packaging is in progress.
+
+## Quick start: naming long reads
+
+You need the tools at the versions the paper used: ITSxRust 0.3.0, BLAST+ 2.17.0, MAFFT 7.526 and
+EPA-ng 0.3.8. You also need three downloads:
+
+- MaarjAM, the gDAT snapshot of July 2020 (3,081 sequences);
+- the UNITE 10.0 general FASTA release of 19 February 2025 (`UNITE_public_19.02.2025.fasta.gz`);
+- Delavaux's V18 LSU database, `2024_AMFPipeline/2024_AMFPipeline_ASV/V18_LSUDB_052025.fasta` at
+  commit f4a0014 of [AMF-LSU-Database-and-Pipeline2](https://github.com/c383d893/AMF-LSU-Database-and-Pipeline2).
+
+```bash
+# 1. Once: check every file against its pin, build the VT and SH BLAST databases, and rebuild the
+#    V18 reference alignment exactly as the frozen run did (MAFFT L-INS-i, checked by hash)
+amfsplit db -o amfsplit_db --maarjam maarjam.fasta --unite UNITE_public_19.02.2025.fasta.gz \
+    --v18-full V18_LSUDB_052025.fasta
+# 2. Cut the regions: ITSxRust anchors (--anchors-tsv), then the Stage 1 options used for HiFi reads
+amfsplit regions -i reads.fq.gz -a reads.anchors.tsv -p panels/amf_legacy_windows.tsv \
+    -o out/sample --max-err-frac 0.15 --only-anchored --open-ends
+# 3. Name every sequence that has all four windows
+amfsplit name -w out/sample --db amfsplit_db -o named/sample
+```
+
+`named/sample` then holds:
+
+- `calls.tsv`: one row per sequence, with the status (known species, known species group, novel
+  species with the genus known, novel lineage, boundary or divergent class), the placement, the
+  novelty and artifact claims, and the reasons behind them;
+- `rows.tsv`: every column of the frozen method's row that does not need the sequence's true culture;
+- `skipped.tsv`: sequences that lack one of the four windows, with what they lack;
+- `run.json`: inputs, database manifest and counts.
+
+BLAST and EPA-ng results are kept in `named/sample/work/`, so a rerun only repeats the naming.
+
+**Scope.** A sequence is named only if it has all four windows: the SSU flank, the full ITS, the
+5.8S and the LSU LR0R-FLR2 window. That means long amplicons spanning SSU, ITS and LSU, as in the
+paper. v0.1 is validated on PacBio HiFi reads and long-read ASVs; ONT consensus sequences are
+accepted but untested. Calls are tied to the pinned references, and `db` refuses other files unless
+told to accept them, in which case the results are not the paper's method.
+
+**Data.** The culture reference and the frozen files ship with the tool: in
+`share/amfsplit/naming` beside an installed binary, or in `parity/naming` in this checkout.
+`AMFSPLIT_DATA` points elsewhere.
 
 | Step | State |
 |---|---|

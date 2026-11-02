@@ -19,6 +19,8 @@ type CopyDistances = BTreeMap<String, CultureDistances>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Pool {
     All,
+    /// main-type copies only (the pool audit's alternative; not used by the frozen method)
+    #[allow(dead_code)]
     Main,
 }
 

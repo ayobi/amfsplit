@@ -457,7 +457,7 @@ pub struct PlaceReport {
 }
 
 /// FASTA in file order, as Biopython reads it: ID = first word of the header, sequence uppercased.
-fn read_fasta_ordered(path: &Path) -> Result<Vec<(String, String)>> {
+pub(crate) fn read_fasta_ordered(path: &Path) -> Result<Vec<(String, String)>> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut out: Vec<(String, String)> = Vec::new();
     let mut seen = BTreeSet::new();

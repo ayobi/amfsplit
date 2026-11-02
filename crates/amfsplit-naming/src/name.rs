@@ -23,6 +23,7 @@ use serde_json::Value;
 
 use super::evidence::{best_unit, culture_accessions, load_reference, reduce_hits_ordered, run_blast_db, RefRecord, DATABASE_PINS, MAX_EVALUE};
 use super::external::{augment, placements_for, TestCopy, TestCulture};
+use super::placement::read_fasta_ordered;
 use super::*;
 
 const WINDOWS: [&str; 4] = ["ssu_flank", "full_its", "s58", "LSU_LROR-FLR2"];
@@ -71,7 +72,13 @@ pub struct DbOptions {
     pub out: PathBuf,
     pub maarjam: PathBuf,
     pub unite: PathBuf,
-    pub reference_dir: PathBuf,
+    /// an existing frozen V18 reference folder, or
+    pub reference_dir: Option<PathBuf>,
+    /// the V18 full FASTA, from which the reference alignment is rebuilt (with the shipped tree,
+    /// model and metadata in `shipped_v18`)
+    pub v18_full: Option<PathBuf>,
+    pub shipped_v18: PathBuf,
+    pub mafft_threads: usize,
     pub blastn: String,
     pub makeblastdb: String,
     pub mafft: String,
@@ -98,12 +105,44 @@ pub fn build_db(o: &DbOptions) -> Result<Value> {
     let maarjam_sha = check(&o.maarjam, vt_sha)?;
     let unite_sha = check(&o.unite, sh_sha)?;
     let mut reference = serde_json::Map::new();
-    for (name, sha) in REFERENCE_PINS { reference.insert(name.into(), check(&o.reference_dir.join(name), sha)?.into()); }
-    let blast = o.out.join("blast");
-    fs::create_dir_all(&blast)?;
     let ref_out = o.out.join("v18_reference");
     fs::create_dir_all(&ref_out)?;
-    for (name, _) in REFERENCE_PINS { fs::copy(o.reference_dir.join(name), ref_out.join(name))?; }
+    match (&o.reference_dir, &o.v18_full) {
+        (Some(dir), None) => {
+            for (name, sha) in REFERENCE_PINS {
+                reference.insert(name.into(), check(&dir.join(name), sha)?.into());
+                fs::copy(dir.join(name), ref_out.join(name))?;
+            }
+        }
+        (None, Some(full)) => {
+            // lsu_placement.py build: R0001... in the release's order, uppercase, then MAFFT L-INS-i
+            for (name, sha) in REFERENCE_PINS.iter().filter(|(n, _)| *n != "reference.aligned.fasta") {
+                reference.insert((*name).into(), check(&o.shipped_v18.join(name), sha)?.into());
+                fs::copy(o.shipped_v18.join(name), ref_out.join(name))?;
+            }
+            let meta = read_table(&o.shipped_v18.join("reference_metadata.tsv"))?;
+            let seqs = read_fasta_ordered(full)?;
+            let same = seqs.len() == meta.rows.len() && seqs.iter().zip(&meta.rows).all(|((x, _), r)| r.get("original_id") == Some(x));
+            if !same { bail!("{} is not the V18 release the reference was built from (sequence IDs or order differ)", full.display()); }
+            let mut unaligned = String::new();
+            for ((_, seq), r) in seqs.iter().zip(&meta.rows) {
+                unaligned.push('>'); unaligned.push_str(row_value(r, "ref_id")?); unaligned.push('\n'); unaligned.push_str(seq); unaligned.push('\n');
+            }
+            let un = ref_out.join("reference.unaligned.fasta");
+            fs::write(&un, unaligned)?;
+            let status = std::process::Command::new(which(&o.mafft)?)
+                .args(["--localpair", "--maxiterate", "1000", "--thread", &o.mafft_threads.to_string(), "--threadit", "0"]).arg(&un)
+                .stdout(fs::File::create(ref_out.join("reference.aligned.fasta"))?).stderr(fs::File::create(ref_out.join("reference_mafft.log"))?)
+                .status()?;
+            if !status.success() { bail!("MAFFT failed while rebuilding the reference alignment; see {}", ref_out.join("reference_mafft.log").display()); }
+            let pin = REFERENCE_PINS.iter().find(|(n, _)| *n == "reference.aligned.fasta").unwrap().1;
+            reference.insert("reference.aligned.fasta".into(), check(&ref_out.join("reference.aligned.fasta"), pin)?.into());
+            reference.insert("built_from".into(), serde_json::json!({"v18_full": full.display().to_string(), "sha256": sha256_file(full)?}));
+        }
+        _ => bail!("give the V18 reference as --v18-full (the release FASTA) or --reference (a frozen reference folder)"),
+    }
+    let blast = o.out.join("blast");
+    fs::create_dir_all(&blast)?;
     let mut arms = serde_json::Map::new();
     for ((arm, kind, region, task, min_id, min_cov), (path, records_pin)) in NAME_ARMS.iter().zip([(&o.maarjam, vt_n), (&o.unite, sh_n)]) {
         let (refs, fasta, read) = load_reference(path, kind, (*kind == "unite").then_some("Glomeromycota"))?;

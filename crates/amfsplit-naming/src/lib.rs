@@ -193,6 +193,7 @@ struct CopyMeta {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // organism and genus are kept with the label for inspection
 struct CultureMeta {
     label: String,
     organism: String,
@@ -810,7 +811,7 @@ fn nearest(data: &FrozenData, x: &str, drop: &StringSet, vt_fit: &Fit) -> Result
 
 fn evaluate_novelty(data: &FrozenData, query_ids: &[String], fits: &BTreeMap<String,Fit>, drop: &StringSet, rec: &BTreeMap<String,Row>) -> Result<Vec<Row>> {
     let vt_fit=&fits["VT"];
-    let vt_units=&vt_fit.sets; let vt_best=&vt_fit.best; let vt_anchor=&vt_fit.anchors; let vt_holders=&vt_fit.holders;
+    let vt_best=&vt_fit.best; let vt_anchor=&vt_fit.anchors; let vt_holders=&vt_fit.holders;
     let para_arms=["VT","SH"];
     let mut main_reach: BTreeMap<String,BTreeMap<String,StringSet>>=BTreeMap::new();
     let mut div_reach: BTreeMap<String,BTreeMap<String,StringSet>>=BTreeMap::new();
@@ -827,7 +828,7 @@ fn evaluate_novelty(data: &FrozenData, query_ids: &[String], fits: &BTreeMap<Str
         let r=data.copies.get(x).ok_or_else(||anyhow!("unknown copy {x}"))?; let c=&r.culture;
         let mut reasons:Vec<String>=Vec::new(); let mut flags:Vec<String>=Vec::new();
         let (near,near_d,nearest_copies)=nearest(data,x,drop,vt_fit)?;
-        let its_d=if let (Some(y),Some(q),Some(t))=(near.as_ref(),data.fa["full_its"].get(x),near.as_ref().and_then(|id|data.fa["full_its"].get(id))) { percent_distance(q,t,-1)? } else {None};
+        let its_d=if let (Some(_),Some(q),Some(t))=(near.as_ref(),data.fa["full_its"].get(x),near.as_ref().and_then(|id|data.fa["full_its"].get(id))) { percent_distance(q,t,-1)? } else {None};
 
         let mut artifact=false; let mut artifact_its:Vec<f64>=Vec::new();
         if near_d.is_some_and(|d|d>=1.0) {
