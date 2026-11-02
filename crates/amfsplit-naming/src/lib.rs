@@ -14,6 +14,8 @@ mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 mod evidence;
 mod gate3;
+mod name;
+pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
 pub use gate3::{run_gate3, Gate3Options, Gate3Report};
 pub use evidence::{load_reference, reduce_hits, run_blast, run_evidence_parity, EvidenceReport, DATABASE_PINS, EVIDENCE_ARMS};
 mod placement;

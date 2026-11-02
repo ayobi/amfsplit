@@ -205,7 +205,7 @@ pub fn run_blast(query: &Path, ref_fasta: &str, workdir: &Path, name: &str, task
     Ok(hits)
 }
 
-fn base_acc(acc: &str) -> &str { acc.split('.').next().unwrap_or("") }
+pub(crate) fn base_acc(acc: &str) -> &str { acc.split('.').next().unwrap_or("") }
 
 /// arm_sets.py `vt_hits`.
 pub fn reduce_hits(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f64, max_ev: f64, min_id: f64,
@@ -388,4 +388,39 @@ pub(crate) fn load_evidence(path: &Path) -> Result<BTreeMap<String, ArmEvidenceS
         out.insert(arm.clone(), (queries, best));
     }
     Ok(out)
+}
+
+/// lgdb_test.py `best_unit`, the rule the external tests used for new sequences: the top identity;
+/// ties to the unit with the higher bit score among all raw hits at that identity, then the smaller code.
+pub(crate) fn best_unit(ids: &[(String, f64)], hits: &[Hit], refs: &BTreeMap<String, RefRecord>) -> (String, f64) {
+    if ids.is_empty() { return (String::new(), 0.0); }
+    let top = ids.iter().map(|(_, p)| *p).fold(f64::NEG_INFINITY, f64::max);
+    let mut tied: Vec<&String> = ids.iter().filter(|(_, p)| *p == top).map(|(u, _)| u).collect();
+    tied.sort();
+    if tied.len() > 1 {
+        let score = |u: &str| hits.iter().filter(|h| refs.get(&h.reference).is_some_and(|r| r.label == u) && h.pident == top)
+            .map(|h| h.bitscore).fold(-1.0f64, f64::max);
+        tied.sort_by(|a, b| score(b).partial_cmp(&score(a)).unwrap().then(a.cmp(b)));
+    }
+    (tied[0].clone(), top)
+}
+
+/// blastn against a database `db` built earlier (by `amfsplit db`); same arguments as `run_blast`.
+pub(crate) fn run_blast_db(query: &Path, db: &Path, task: &str, threads: usize, blastn: &str) -> Result<BTreeMap<String, Vec<Hit>>> {
+    let out = std::process::Command::new(blastn)
+        .args(["-task", task, "-query"]).arg(query).arg("-db").arg(db)
+        .args(["-dust", "no", "-outfmt", "6 qseqid sseqid pident length qlen slen evalue bitscore", "-evalue", "1e-10",
+               "-max_target_seqs", "5000", "-max_hsps", "1", "-num_threads", &threads.to_string()])
+        .output().with_context(|| format!("starting {blastn}"))?;
+    if !out.status.success() { bail!("blastn failed: {}", String::from_utf8_lossy(&out.stderr)); }
+    let mut hits: BTreeMap<String, Vec<Hit>> = BTreeMap::new();
+    for line in String::from_utf8(out.stdout)?.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() != 8 { bail!("unexpected blastn line: {line}"); }
+        hits.entry(f[0].to_owned()).or_default().push(Hit {
+            reference: f[1].to_owned(), pident: f[2].parse()?, length: f[3].parse()?, qlen: f[4].parse()?,
+            slen: f[5].parse()?, evalue: f[6].parse()?, bitscore: f[7].parse()?,
+        });
+    }
+    Ok(hits)
 }

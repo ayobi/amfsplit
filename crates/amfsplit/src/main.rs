@@ -48,6 +48,99 @@ enum Command {
     /// Gate 3: the paper's calls (both culture-only holdouts, species clades plus N6) from the tool's
     /// own BLAST evidence and EPA-ng placements instead of the frozen files.
     Gate3(Gate3Args),
+    /// Check MaarjAM, UNITE and the frozen V18 reference against their pins and build the VT and SH
+    /// BLAST databases once, with a manifest of the files and tools
+    Db(DbArgs),
+    /// Name query sequences with the paper's method (species clades plus N6), from the four windows
+    /// `amfsplit regions` writes
+    Name(NameArgs),
+}
+
+#[derive(Args)]
+struct DbArgs {
+    /// Output folder (new or empty)
+    #[arg(short = 'o', long)]
+    out: PathBuf,
+    /// MaarjAM FASTA
+    #[arg(long)]
+    maarjam: PathBuf,
+    /// UNITE general FASTA release 10.0, 19 February 2025 (.gz as downloaded)
+    #[arg(long)]
+    unite: PathBuf,
+    /// Frozen V18 reference folder (reference.aligned.fasta, fit.raxml.bestTree, fit.raxml.bestModel, reference_metadata.tsv)
+    #[arg(long)]
+    reference: PathBuf,
+    #[arg(long, default_value = "blastn")]
+    blastn: String,
+    #[arg(long, default_value = "makeblastdb")]
+    makeblastdb: String,
+    #[arg(long, default_value = "mafft")]
+    mafft: String,
+    #[arg(long, default_value = "epa-ng")]
+    epa_ng: String,
+    /// Accept files that differ from the pinned ones (results are then not the paper's method)
+    #[arg(long)]
+    allow_unpinned: bool,
+}
+
+fn db_cmd(a: DbArgs) -> Result<()> {
+    let m = amfsplit_naming::build_db(&amfsplit_naming::DbOptions {
+        out: a.out.clone(), maarjam: a.maarjam, unite: a.unite, reference_dir: a.reference,
+        blastn: a.blastn, makeblastdb: a.makeblastdb, mafft: a.mafft, epa_ng: a.epa_ng, allow_unpinned: a.allow_unpinned,
+    })?;
+    for arm in ["VT", "SH"] {
+        println!("{arm}: {} references from {} records", m["arms"][arm]["references"], m["arms"][arm]["records_read"]);
+    }
+    println!("db written to {} ({})", a.out.display(), if m["pinned"].as_bool() == Some(true) { "all files pinned" } else { "UNPINNED files: not the paper's method" });
+    Ok(())
+}
+
+#[derive(Args)]
+struct NameArgs {
+    /// Prefix of the `amfsplit regions` output: <prefix>.ssu_flank.fasta, .full_its, .s58, .LSU_LROR-FLR2
+    #[arg(short = 'w', long)]
+    windows: PathBuf,
+    /// Folder made by `amfsplit db`
+    #[arg(long)]
+    db: PathBuf,
+    /// Output folder: calls.tsv, rows.tsv, skipped.tsv, run.json, work/ (BLAST and EPA-ng results, reused on rerun)
+    #[arg(short = 'o', long)]
+    out: PathBuf,
+    #[arg(long, default_value_t = 4)]
+    blast_threads: usize,
+    /// EPA-ng --threads (8 as in the frozen runs)
+    #[arg(long, default_value_t = 8)]
+    epa_threads: usize,
+    /// Override the db manifest's blastn
+    #[arg(long)]
+    blastn: Option<String>,
+    /// Override the db manifest's mafft
+    #[arg(long)]
+    mafft: Option<String>,
+    /// Override the db manifest's epa-ng
+    #[arg(long)]
+    epa_ng: Option<String>,
+    /// Compare the named rows with this table (.tsv or .tsv.gz) on the shared columns
+    #[arg(long)]
+    compare_with: Option<PathBuf>,
+}
+
+fn name_cmd(a: NameArgs) -> Result<()> {
+    let r = amfsplit_naming::run_name(&amfsplit_naming::NameOptions {
+        windows: a.windows, db: a.db, out: a.out.clone(), fixture_dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming"),
+        blast_threads: a.blast_threads, epa_threads: a.epa_threads, blastn: a.blastn, mafft: a.mafft, epa_ng: a.epa_ng, compare_with: a.compare_with,
+    })?;
+    println!("{} sequences named, {} skipped (missing windows); {}", r.named, r.skipped, a.out.join("calls.tsv").display());
+    for (status, n) in &r.status_counts { println!("  {n:5}  {status}"); }
+    if let Some((n, diff)) = &r.comparison {
+        if diff.is_empty() { println!("compared with the given table: {n} rows, every shared column identical"); }
+        else {
+            println!("compared with the given table: {n} rows; differing cells by column:");
+            for (c, k) in diff { println!("  {c}: {k}"); }
+            std::process::exit(1);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Args)]
@@ -595,6 +688,8 @@ fn main() -> std::process::ExitCode {
         Command::PlaceSummary(a) => place_summary_cmd(a),
         Command::Place(a) => place_cmd(a),
         Command::Gate3(a) => gate3_cmd(a),
+        Command::Db(a) => db_cmd(a),
+        Command::Name(a) => name_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

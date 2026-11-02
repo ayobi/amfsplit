@@ -109,18 +109,18 @@ const EUK: Spec = Spec {
                  "9728271f313522aedf70ec40fcccf6c7ebff5b13daef7173dfbd5a566cd46266"],
 };
 
-struct TestCulture {
-    organism: String,
-    code: String,
-    role: String,
-    labs: StringSet,
-    collections: StringSet,
+pub(crate) struct TestCulture {
+    pub(crate) organism: String,
+    pub(crate) code: String,
+    pub(crate) role: String,
+    pub(crate) labs: StringSet,
+    pub(crate) collections: StringSet,
 }
 
-struct TestCopy {
-    culture: String,
-    role: String,
-    organism: String,
+pub(crate) struct TestCopy {
+    pub(crate) culture: String,
+    pub(crate) role: String,
+    pub(crate) organism: String,
 }
 
 #[derive(Clone, Debug)]
@@ -163,7 +163,7 @@ fn pinned(path: &Path, expected: &str) -> Result<()> {
 
 /// lgdb_test.py `augmented_data`: the frozen data plus the test copies, which never act as comparators
 /// (they stay out of `mains` and `main58`) and are held out of every call.
-fn augment(base: &FrozenData, cultures: &BTreeMap<String, TestCulture>, copies: &[(String, TestCopy)],
+pub(crate) fn augment(base: &FrozenData, cultures: &BTreeMap<String, TestCulture>, copies: &[(String, TestCopy)],
            windows: &BTreeMap<String, SeqMap>, evidence: &Value, vt_key: &str) -> Result<FrozenData> {
     let mut d = base.clone();
     for (cid, c) in cultures {
@@ -209,7 +209,7 @@ fn augment(base: &FrozenData, cultures: &BTreeMap<String, TestCulture>, copies: 
 }
 
 /// lgdb_test.py `placements_for`: the first table that places a copy wins; every copy must be placed.
-fn placements_for(data: &FrozenData, tables: &[&Path]) -> Result<BTreeMap<String, Row>> {
+pub(crate) fn placements_for(data: &FrozenData, tables: &[&Path]) -> Result<BTreeMap<String, Row>> {
     let mut out: BTreeMap<String, Row> = BTreeMap::new();
     for t in tables {
         for r in read_table_any(t)?.rows {
