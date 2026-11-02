@@ -207,7 +207,7 @@ struct Gate0Args {
     /// clades plus the ITS distance rule, the paper's method; Gate 0b step 2), rounds (the 52
     /// LSU-removal and genus rounds; needs --benchmark), lgdb (the LongGloDB test; needs
     /// --benchmark and --lgdb), euk (the EUKARYOME test; needs --benchmark and --euk) or all.
-    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "euk", "placement", "all"])]
+    #[arg(long, default_value = "all", value_parser = ["baseline", "species-clades", "n6", "rounds", "lgdb", "euk", "placement", "evidence", "all"])]
     policy: String,
     /// amf-novelty-benchmark checkout holding the archived rounds (release 0.3.2 or later);
     /// defaults to $AMFSPLIT_BENCHMARK.
@@ -228,6 +228,24 @@ struct Gate0Args {
     /// jplace); defaults to $AMFSPLIT_M4_RUNS. Used with --benchmark for --policy placement.
     #[arg(long)]
     m4_runs: Option<PathBuf>,
+    /// MaarjAM FASTA (VT evidence, for --policy evidence); defaults to $AMFSPLIT_MAARJAM
+    #[arg(long)]
+    maarjam: Option<PathBuf>,
+    /// UNITE general FASTA release 10.0, 19 February 2025 (SH evidence); defaults to $AMFSPLIT_UNITE
+    #[arg(long)]
+    unite: Option<PathBuf>,
+    /// V18 AMF-only LSU FASTA (LSU evidence); defaults to $AMFSPLIT_V18
+    #[arg(long)]
+    v18: Option<PathBuf>,
+    /// BLAST+ threads for --policy evidence
+    #[arg(long, default_value_t = 4)]
+    blast_threads: usize,
+    /// Only these evidence arms (VT, SH, LSU; repeatable); default all three
+    #[arg(long)]
+    evidence_arm: Vec<String>,
+    /// Check an even sample of about this many culture copies instead of all 903
+    #[arg(long)]
+    evidence_sample: Option<usize>,
 }
 
 #[derive(Args)]
@@ -487,6 +505,26 @@ fn gate0_cmd(a: Gate0Args) -> Result<()> {
             }
             _ if a.policy == "placement" => anyhow::bail!("--policy placement needs --benchmark and --m4-runs (or AMFSPLIT_BENCHMARK and AMFSPLIT_M4_RUNS)"),
             _ => println!("Placement summaries: SKIPPED (needs --benchmark and --m4-runs, or AMFSPLIT_BENCHMARK and AMFSPLIT_M4_RUNS)"),
+        }
+    }
+    if matches!(a.policy.as_str(), "evidence" | "all") {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let dbs = [("VT", a.maarjam.clone().or_else(|| env("AMFSPLIT_MAARJAM"))),
+                   ("SH", a.unite.clone().or_else(|| env("AMFSPLIT_UNITE"))),
+                   ("LSU", a.v18.clone().or_else(|| env("AMFSPLIT_V18")))];
+        if dbs.iter().all(|(_, p)| p.is_some()) {
+            let dbs: std::collections::BTreeMap<String, PathBuf> = dbs.into_iter().map(|(k, p)| (k.to_owned(), p.unwrap())).collect();
+            let work = std::env::temp_dir().join(format!("amfsplit-evidence-{}", std::process::id()));
+            let report = amfsplit_naming::run_evidence_parity(&fixtures, &dbs, &work, a.blast_threads, "makeblastdb", "blastn",
+                                                              &a.evidence_arm, a.evidence_sample);
+            let _ = std::fs::remove_dir_all(&work);
+            let report = report?;
+            print!("{}", report.summary());
+            passed &= report.passed();
+        } else if a.policy == "evidence" {
+            anyhow::bail!("--policy evidence needs --maarjam, --unite and --v18 (or AMFSPLIT_MAARJAM, AMFSPLIT_UNITE and AMFSPLIT_V18), and makeblastdb and blastn on PATH");
+        } else {
+            println!("Evidence: SKIPPED (needs --maarjam, --unite and --v18, or AMFSPLIT_MAARJAM, AMFSPLIT_UNITE and AMFSPLIT_V18)");
         }
     }
     if !passed {

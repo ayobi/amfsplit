@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 mod n6_its;
 mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
+mod evidence;
+pub use evidence::{load_reference, reduce_hits, run_blast, run_evidence_parity, EvidenceReport, DATABASE_PINS, EVIDENCE_ARMS};
 mod placement;
 pub use placement::{compare_up_to_ties, placement_tsv, run_place, run_placement_parity, summarize_placements, PlaceOptions, PlaceReport, PlacementReport, TableMatch, TopTies, FROZEN_QUERIES_SHA, FROZEN_TABLE_SHA, PLACEMENT_HEADERS, REFERENCE_PINS};
 
