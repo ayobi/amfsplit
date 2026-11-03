@@ -154,6 +154,8 @@ impl InsideRule {
 }
 
 pub struct ArmReport {
+    /// every table's rows before and after the rule, for scoring
+    pub results: Vec<super::scoring::TableResult>,
     pub rows: usize,
     pub known_before: usize,
     pub demoted: usize,
@@ -173,12 +175,14 @@ pub fn run_r2_on_tables(fixture_dir: &Path, tables: &[(std::path::PathBuf, std::
     let mut memo = DistanceMemo::default();
     let mut fits: BTreeMap<String, InsideRule> = BTreeMap::new();
     let (mut n_rows, mut known_before, mut demoted, mut rounds, mut limits) = (0, 0, 0, BTreeSet::new(), BTreeSet::new());
+    let mut results = Vec::new();
     for (table, out) in tables {
         let t = read_table_any(table)?;
         if !t.headers.iter().any(|h| h == "held_cultures") { bail!("{} has no held_cultures column", table.display()); }
         let mut by_round: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (i, r) in t.rows.iter().enumerate() { by_round.entry(row_value(r, "held_cultures")?.to_owned()).or_default().push(i); }
         let mut rows = t.rows.clone();
+        let frozen_rows = t.rows.clone();
         known_before += rows.iter().filter(|r| r.get("status").is_some_and(|s| s.starts_with("known"))).count();
         for (held, idx) in &by_round {
             if !fits.contains_key(held) {
@@ -197,6 +201,20 @@ pub fn run_r2_on_tables(fixture_dir: &Path, tables: &[(std::path::PathBuf, std::
         headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned()));
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();
+        results.push(super::scoring::TableResult { table: table.clone(), frozen: frozen_rows, arm: rows });
     }
-    Ok(ArmReport { rows: n_rows, known_before, demoted, rounds: rounds.len(), limits: limits.into_iter().collect() })
+    Ok(ArmReport { results, rows: n_rows, known_before, demoted, rounds: rounds.len(), limits: limits.into_iter().collect() })
+}
+
+/// The three inside-marker windows of sequences outside the culture reference, from a windows prefix
+/// (`<prefix>.full_its.fasta`, `<prefix>.LSU_LROR-FLR2.fasta`, `<prefix>.ssu_flank.fasta`).
+pub fn read_windows(prefix: &Path) -> Result<BTreeMap<String, SeqMap>> {
+    let name = prefix.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    INSIDE_MARKERS.iter().map(|(m, _)| Ok(((*m).to_owned(), read_fasta(&prefix.with_file_name(format!("{name}.{m}.fasta")))?))).collect()
+}
+
+/// Score an arm's tables under one design (see `scoring`), against the culture reference.
+pub fn score_results(fixture_dir: &Path, design: &str, results: &[super::scoring::TableResult], euk_predictions: Option<&Path>) -> Result<Vec<super::scoring::OutcomeScore>> {
+    let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
+    super::scoring::score(&data, design, results, euk_predictions)
 }

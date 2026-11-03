@@ -16,7 +16,9 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{run_r2_on_tables, ArmReport, INSIDE_MARKERS, R2_COLUMNS};
+pub use rules::{read_windows, run_r2_on_tables, score_results, ArmReport, INSIDE_MARKERS, R2_COLUMNS};
+mod scoring;
+pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
 pub use gate3::{run_gate3, Gate3Options, Gate3Report};
 pub use evidence::{load_reference, reduce_hits, run_blast, run_evidence_parity, EvidenceReport, DATABASE_PINS, EVIDENCE_ARMS};
@@ -1405,6 +1407,61 @@ mod tests {
             let got = rule.limits[m].unwrap();
             assert!((got - want).abs() < 1e-12, "{m}: {got} against the frozen {want}");
         }
+    }
+
+    fn r2_scores(tables: &[(std::path::PathBuf, &str)], windows: &BTreeMap<String, SeqMap>) -> BTreeMap<String, (usize, usize, usize)> {
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let out = std::env::temp_dir().join(format!("amfsplit-r2-test-{}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+        let pairs: Vec<_> = tables.iter().enumerate().map(|(i, (t, _))| (t.clone(), out.join(format!("{i}.tsv")))).collect();
+        let report = rules::run_r2_on_tables(&fx, &pairs, windows).unwrap();
+        let _ = std::fs::remove_dir_all(&out);
+        let mut got = BTreeMap::new();
+        let designs: StringSet = tables.iter().map(|(_, d)| (*d).to_owned()).collect();
+        for d in designs {
+            let res: Vec<_> = report.results.iter().zip(tables).filter(|(_, (_, dd))| *dd == d).map(|(r, _)| scoring::TableResult { table: r.table.clone(), frozen: r.frozen.clone(), arm: r.arm.clone() }).collect();
+            let euk = std::env::var("AMFSPLIT_BENCHMARK").ok().map(|b| Path::new(&b).join("benchmarks/eukaryome/predictions.predictions.tsv"));
+            for s in rules::score_results(&fx, &d, &res, euk.as_deref()).unwrap() {
+                got.insert(format!("{}: {}", s.design, s.outcome), (s.n, s.frozen, s.arm));
+            }
+        }
+        got
+    }
+
+    #[test]
+    fn r2_reproduces_its_holdout_development_estimates() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let got = r2_scores(&[(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"),
+                              (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 738));
+        assert_eq!(got["species holdout: false known"], (803, 18, 18));
+    }
+
+    #[test]
+    fn r2_reproduces_its_round_and_external_development_estimates() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R2 round and external estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let mut rounds = Vec::new();
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            if !d.file_name().unwrap().to_string_lossy().starts_with("species_") { continue; }
+            for k in ["external_holdout_v2", "full_reference_v2"] { rounds.push((d.join(format!("06_evaluation_v2/{k}.copies.tsv")), "rounds")); }
+        }
+        let got = r2_scores(&rounds, &BTreeMap::new());
+        assert_eq!(got["LSU-removal rounds: false known, V18 removed"], (673, 53, 48));
+        assert_eq!(got["LSU-removal rounds: false known, V18 intact"], (673, 9, 9));
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let got = r2_scores(&[(m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), "longglodb")], &lw);
+        assert_eq!(got["LongGloDB: false known (absent taxa)"], (102, 4, 4));
+        assert_eq!(got["LongGloDB: known species kept"], (164, 136, 135));
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let got = r2_scores(&[(m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz"), "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 1));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 149));
     }
 
     #[test]

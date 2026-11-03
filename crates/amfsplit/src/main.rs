@@ -76,26 +76,16 @@ struct ArmArgs {
     /// Output folder (several --table): each written as <its round folder>__<its file name>
     #[arg(long)]
     out_dir: Option<PathBuf>,
+    /// Score frozen against arm under a design: culture, species, rounds, longglodb or eukaryome
+    #[arg(long, value_parser = ["culture", "species", "rounds", "longglodb", "eukaryome"])]
+    score: Option<String>,
+    /// The EUKARYOME test's locked roles (benchmarks/eukaryome/predictions.predictions.tsv), for --score eukaryome
+    #[arg(long)]
+    euk_predictions: Option<PathBuf>,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
-    let mut extra = std::collections::BTreeMap::new();
-    if let Some(prefix) = &a.windows {
-        let name = prefix.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        for (m, _) in amfsplit_naming::INSIDE_MARKERS {
-            let p = prefix.with_file_name(format!("{name}.{m}.fasta"));
-            let mut seqs = std::collections::BTreeMap::new();
-            let (mut id, mut s) = (None::<String>, String::new());
-            for line in std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?.lines() {
-                if let Some(h) = line.strip_prefix('>') {
-                    if let Some(i) = id.take() { seqs.insert(i, std::mem::take(&mut s)); }
-                    id = h.split_whitespace().next().map(str::to_owned);
-                } else { s.push_str(&line.trim().to_ascii_uppercase()); }
-            }
-            if let Some(i) = id { seqs.insert(i, s); }
-            extra.insert(m.to_owned(), seqs);
-        }
-    }
+    let extra = match &a.windows { Some(p) => amfsplit_naming::read_windows(p)?, None => Default::default() };
     let pairs: Vec<(PathBuf, PathBuf)> = match (&a.out, &a.out_dir) {
         (Some(o), None) if a.table.len() == 1 => vec![(a.table[0].clone(), o.clone())],
         (None, Some(d)) => {
@@ -109,6 +99,17 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
     };
     let r = amfsplit_naming::run_r2_on_tables(&naming_data(), &pairs, &extra)?;
+    if let Some(design) = &a.score {
+        let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
+        println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",
+                 amfsplit_naming::BOOTSTRAP_REPLICATES, amfsplit_naming::BOOTSTRAP_SEED);
+        for s in &scores {
+            println!("{:<20} {:<28} {:>14} {:>14}   {:+.2} to {:+.2}", s.design, s.outcome, format!("{}/{}", s.frozen, s.n), format!("{}/{}", s.arm, s.n), s.diff_low, s.diff_high);
+        }
+        let path = match (&a.out, &a.out_dir) { (Some(o), _) => o.with_extension("scores.tsv"), (None, Some(d)) => d.join("scores.tsv"), _ => unreachable!() };
+        std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
+        println!("scores written to {}", path.display());
+    }
     println!("R2 on {} rows in {} rounds of {} table(s): {} of {} known calls demoted to N7", r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())
