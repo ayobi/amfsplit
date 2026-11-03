@@ -60,9 +60,10 @@ enum Command {
 
 #[derive(Args)]
 struct ArmArgs {
-    /// The rule to apply (so far: r2, the inside gate)
-    #[arg(long, value_parser = ["r2"])]
-    rule: String,
+    /// The rules to apply, comma-separated, run in protocol order: r1a (unnamed cultures as taxa,
+    /// inside) then r2 (the inside gate)
+    #[arg(long, value_delimiter = ',', required = true)]
+    rule: Vec<String>,
     /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's
     /// table; repeat for several (with --out-dir), sharing one distance cache
     #[arg(long, required = true)]
@@ -98,7 +99,8 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         }
         _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
     };
-    let r = amfsplit_naming::run_r2_on_tables(&naming_data(), &pairs, &extra)?;
+    let rules: Vec<&str> = a.rule.iter().map(String::as_str).collect();
+    let r = amfsplit_naming::run_rules_on_tables(&naming_data(), &rules, &pairs, &extra)?;
     if let Some(design) = &a.score {
         let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
         println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",
@@ -110,7 +112,8 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
         println!("scores written to {}", path.display());
     }
-    println!("R2 on {} rows in {} rounds of {} table(s): {} of {} known calls demoted to N7", r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
+    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed (R1a U1 and R2 N7; {} known calls before)",
+             rules.join("+"), r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())
 }

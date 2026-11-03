@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, score_results, ArmReport, INSIDE_MARKERS, R2_COLUMNS};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R2_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1410,6 +1410,11 @@ mod tests {
     }
 
     fn r2_scores(tables: &[(std::path::PathBuf, &str)], windows: &BTreeMap<String, SeqMap>) -> BTreeMap<String, (usize, usize, usize)> {
+        rule_scores(&["r2"], tables, windows).0
+    }
+
+    /// Scores of a rule chain on tables, and the arm rows.
+    fn rule_scores(rules: &[&str], tables: &[(std::path::PathBuf, &str)], windows: &BTreeMap<String, SeqMap>) -> (BTreeMap<String, (usize, usize, usize)>, Vec<Row>) {
         let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
         // tests run as threads of one process, so each call gets its own folder
         static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1417,7 +1422,7 @@ mod tests {
         let out = std::env::temp_dir().join(format!("amfsplit-r2-test-{}-{call}", std::process::id()));
         std::fs::create_dir_all(&out).unwrap();
         let pairs: Vec<_> = tables.iter().enumerate().map(|(i, (t, _))| (t.clone(), out.join(format!("{i}.tsv")))).collect();
-        let report = rules::run_r2_on_tables(&fx, &pairs, windows).unwrap();
+        let report = rules::run_rules_on_tables(&fx, rules, &pairs, windows).unwrap();
         let _ = std::fs::remove_dir_all(&out);
         let mut got = BTreeMap::new();
         let designs: StringSet = tables.iter().map(|(_, d)| (*d).to_owned()).collect();
@@ -1428,7 +1433,36 @@ mod tests {
                 got.insert(format!("{}: {}", s.design, s.outcome), (s.n, s.frozen, s.arm));
             }
         }
-        got
+        (got, report.results.into_iter().flat_map(|r| r.arm).collect())
+    }
+
+    #[test]
+    fn r1a_leaves_the_v4_holdouts_unchanged() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let (got, _) = rule_scores(&["r1a"], &[(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"),
+                                              (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 745));
+        assert_eq!(got["culture holdout: exact species calls"], (755, 697, 697));
+        assert_eq!(got["species holdout: false known"], (803, 18, 18));
+    }
+
+    #[test]
+    fn r1a_reproduces_its_eukaryome_development_estimates() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R1a EUKARYOME estimates: set AMFSPLIT_BENCHMARK and AMFSPLIT_EUK");
+            return;
+        };
+        let table = Path::new(&bench).join("benchmarks/m4_external_holdout/runs_euk/06_scores/A_primary_v2.copies.tsv.gz");
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let (got, rows) = rule_scores(&["r1a"], &[(table.clone(), "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 3));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 151));
+        let nano: Vec<&Row> = rows.iter().filter(|r| r["organism"].starts_with("Nanoglomus") && !r["r1a_unnamed_inside"].is_empty()).collect();
+        assert_eq!((nano.len(), nano.iter().filter(|r| r["r1a_action"] == "U1").count()), (42, 9));
+        let (got, _) = rule_scores(&["r1a", "r2"], &[(table, "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 1));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 149));
     }
 
     #[test]
