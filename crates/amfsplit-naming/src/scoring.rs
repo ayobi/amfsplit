@@ -144,6 +144,25 @@ fn pairs(t: &TableResult) -> Result<impl Iterator<Item = (&Row, &Row)>> {
     Ok(t.frozen.iter().zip(&t.arm))
 }
 
+fn has_r7(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r7_action"))) }
+
+/// R7: new-lineage calls (frozen) given the right or a wrong genus; culture rows, true genus = culture's.
+fn r7_new_lineages(data: &FrozenData, design: &str, results: &[TableResult]) -> Result<Vec<OutcomeScore>> {
+    let (mut right, mut wrong) = (Vec::new(), Vec::new());
+    for t in results {
+        for (f, a) in pairs(t)? {
+            if col(f, "copy_class") != "main" || col(f, "status") != "novel lineage" { continue; }
+            let c = col(f, "culture");
+            let truth = data.cultures.get(c).map(|m| m.genus.clone()).unwrap_or_default();
+            let cluster = data.species.get(c).cloned().unwrap_or_else(|| c.to_owned());
+            let g = genera_of(a);
+            right.push(Unit { cluster: cluster.clone(), frozen: false, arm: g.contains(&truth.as_str()) });
+            wrong.push(Unit { cluster, frozen: false, arm: !g.is_empty() && !g.contains(&truth.as_str()) });
+        }
+    }
+    Ok(vec![summarize(design, "new-lineage calls given the right genus", right), summarize(design, "new-lineage calls given a wrong genus", wrong)])
+}
+
 fn has_r3(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r3_flag"))) }
 
 /// Short-5.8S divergent copies called divergent, clustered by species (or culture, when unnamed).
@@ -196,6 +215,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             out.push(summarize("species holdout", "false known", fk));
             out.push(summarize("species holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
             if has_r3(results) { out.extend(genus_flags(data, "species holdout", results, &|_| Some(String::new()))?); }
+            if has_r7(results) { out.extend(r7_new_lineages(data, "species holdout", results)?); }
         }
         "rounds" => {
             let mut by_kind: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
@@ -219,9 +239,33 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 }
             }
             for (kind, units) in by_kind { out.push(summarize("LSU-removal rounds", &kind, units)); }
+            if has_r7(results) {
+                // genus right among first-outcome main rows whose genus another training culture holds
+                let mut by: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
+                for t in results {
+                    let dir = t.table.parent().ok_or_else(|| anyhow!("not in a round folder"))?;
+                    let key = dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let metrics: Value = serde_json::from_str(&fs::read_to_string(dir.join("metrics.json"))?)?;
+                    let own = dir.parent().is_some_and(|r| r.join("05_summary/lsu_placements.copies.tsv").is_file());
+                    if !key.starts_with("species_") || !own || metrics.get("development_fold").and_then(Value::as_bool).unwrap_or(false) { continue; }
+                    let file = t.table.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let kind = if file.starts_with("external_holdout") { "genus right, genus held by another culture, V18 removed" } else { "genus right, genus held by another culture, V18 intact" };
+                    for (f, a) in pairs(t)? {
+                        if col(f, "copy_class") != "main" { continue; }
+                        let c = col(f, "culture");
+                        let truth = data.cultures.get(c).map(|m| m.genus.clone()).unwrap_or_default();
+                        let held: StringSet = col(f, "held_cultures").split(';').map(str::to_owned).collect();
+                        let present = data.cultures.iter().any(|(o, m)| !held.contains(o) && m.genus == truth);
+                        if !present { continue; }
+                        by.entry(kind.into()).or_default().push(Unit { cluster: key.clone(), frozen: genera_of(f).contains(&truth.as_str()), arm: genera_of(a).contains(&truth.as_str()) });
+                    }
+                }
+                for (k, u) in by { out.push(summarize("LSU-removal rounds", &k, u)); }
+            }
             if has_r3(results) {
                 let first_outcome = |t: &TableResult| -> Option<String> {
                     let dir = t.table.parent()?; let key = dir.parent()?.file_name()?.to_string_lossy().into_owned();
+                    if !dir.parent()?.join("05_summary/lsu_placements.copies.tsv").is_file() { return None; }
                     let metrics: Value = serde_json::from_str(&fs::read_to_string(dir.join("metrics.json")).ok()?).ok()?;
                     if !key.starts_with("species_") || metrics.get("development_fold").and_then(Value::as_bool).unwrap_or(false) { return None; }
                     let f = t.table.file_name()?.to_string_lossy().into_owned();
@@ -251,6 +295,21 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             }
             out.push(summarize("LongGloDB", "false known (absent taxa)", fk));
             out.push(summarize("LongGloDB", "known species kept", kept));
+            if has_r7(results) {
+                let v4_genera: StringSet = data.cultures.values().map(|m| m.genus.clone()).collect();
+                let (mut sp, mut ag) = (Vec::new(), Vec::new());
+                for t in results {
+                    for (f, a) in pairs(t)? {
+                        let o = col(f, "organism");
+                        if !is_named(o) || v4_species.contains(o) { continue; }
+                        let og = normalise_genus(o.split_whitespace().next().unwrap_or(""));
+                        if v4_genera.contains(&og) { sp.push(Unit { cluster: o.into(), frozen: genera_of(f).contains(&og.as_str()), arm: genera_of(a).contains(&og.as_str()) }); }
+                        else { ag.push(Unit { cluster: o.into(), frozen: !genera_of(f).is_empty(), arm: !genera_of(a).is_empty() }); }
+                    }
+                }
+                out.push(summarize("LongGloDB", "absent species in v4 genera: genus right", sp));
+                out.push(summarize("LongGloDB", "absent genera: a genus given (wrong)", ag));
+            }
         }
         "eukaryome" => {
             let path = euk_predictions.ok_or_else(|| anyhow!("design eukaryome needs the test's predictions.predictions.tsv"))?;
@@ -286,6 +345,26 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.push(summarize("EUKARYOME", "absent genera given a genus: flagged", ag));
                 out.push(summarize("EUKARYOME", "absent species, right genus: falsely flagged", sp));
                 out.push(summarize("EUKARYOME", "known species kept: falsely flagged", kn));
+            }
+            if has_r7(results) {
+                let (mut sp, mut ag, mut agf) = (Vec::new(), Vec::new(), Vec::new());
+                for t in results {
+                    for (f, a) in pairs(t)? {
+                        if col(f, "status") != "novel lineage" { continue; }
+                        let p = &roles[col(a, "accession")];
+                        let (role, organism) = (col(p, "role"), col(p, "organism"));
+                        let og = normalise_genus(organism.split_whitespace().next().unwrap_or(""));
+                        let given = !genera_of(a).is_empty();
+                        if role == "novel species, genus in v4" { sp.push(Unit { cluster: organism.into(), frozen: false, arm: genera_of(a).contains(&og.as_str()) }); }
+                        else if role == "novel lineage, genus not in v4" && og != "Nanoglomus" {
+                            ag.push(Unit { cluster: organism.into(), frozen: false, arm: given });
+                            if given { agf.push(Unit { cluster: organism.into(), frozen: false, arm: g1(a) }); }
+                        }
+                    }
+                }
+                out.push(summarize("EUKARYOME", "absent species in v4 genera, new lineages: right genus given", sp));
+                out.push(summarize("EUKARYOME", "absent lineages (Nanoglomus aside): wrong genus given", ag));
+                out.push(summarize("EUKARYOME", "absent lineages given a genus: flagged by R3", agf));
             }
         }
         _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome)"),

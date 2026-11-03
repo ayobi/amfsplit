@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, R7_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1578,9 +1578,53 @@ mod tests {
             let (got, _) = rule_scores(&[rule], &gn, &BTreeMap::new());
             assert_eq!(got["genus rounds: wrong-genus calls flagged, V18 removed"], (69, 0, gr), "{rule}");
             let (got, _) = rule_scores(&[rule], &sp, &BTreeMap::new());
-            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 intact"], (328, 0, rr_intact), "{rule}");
-            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 removed"], (346, 0, rr_removed), "{rule}");
+            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 intact"], (308, 0, rr_intact), "{rule}");
+            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 removed"], (326, 0, rr_removed), "{rule}");
         }
+    }
+
+    #[test]
+    fn r7_gives_right_genera_in_the_species_holdout() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let (got, _) = rule_scores(&["r7", "r3b"], &[(g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+        assert_eq!(got["species holdout: new-lineage calls given the right genus"], (365, 0, 179));
+        assert_eq!(got["species holdout: new-lineage calls given a wrong genus"], (365, 0, 0));
+    }
+
+    #[test]
+    fn r7_development_estimates() {
+        // first computed 3 November 2026 by the arm code (the rule as written, unit level)
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R7 estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let mut rounds = Vec::new();
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            if !d.file_name().unwrap().to_string_lossy().starts_with("species_") { continue; }
+            for k in ["external_holdout_v2", "full_reference_v2"] { rounds.push((d.join(format!("06_evaluation_v2/{k}.copies.tsv")), "rounds")); }
+        }
+        let (got, _) = rule_scores(&["r7", "r3b"], &rounds, &BTreeMap::new());
+        assert_eq!(got["LSU-removal rounds: genus right, genus held by another culture, V18 removed"], (487, 326, 487));
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let run = |table: std::path::PathBuf, design: &str, w: &BTreeMap<String, SeqMap>, qp: std::path::PathBuf| {
+            let out = std::env::temp_dir().join(format!("amfsplit-r7-{}-{design}.tsv", std::process::id()));
+            let r = rules::run_rules_with_placements(&fx, &["r7", "r3b"], &[(table, out.clone())], w, Some(&qp)).unwrap();
+            let _ = std::fs::remove_file(&out);
+            let euk = Path::new(&bench).join("benchmarks/eukaryome/predictions.predictions.tsv");
+            rules::score_results(&fx, design, &r.results, Some(&euk)).unwrap().into_iter().map(|s| (format!("{}: {}", s.design, s.outcome), (s.n, s.frozen, s.arm))).collect::<BTreeMap<_, _>>()
+        };
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let got = run(m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), "longglodb", &lw, m4.join("runs_lgdb/A/05_summary/lsu_placements.copies.tsv"));
+        assert_eq!(got["LongGloDB: absent species in v4 genera: genus right"], (59, 7, 51));
+        assert_eq!(got["LongGloDB: absent genera: a genus given (wrong)"], (43, 0, 0));
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let got = run(m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz"), "eukaryome", &ew, m4.join("runs_euk/A/05_summary/lsu_placements.copies.tsv.gz"));
+        assert_eq!(got["EUKARYOME: absent species in v4 genera, new lineages: right genus given"], (29, 0, 27));
+        assert_eq!(got["EUKARYOME: absent lineages (Nanoglomus aside): wrong genus given"], (1468, 0, 24));
+        assert_eq!(got["EUKARYOME: absent lineages given a genus: flagged by R3"], (24, 0, 17));
     }
 
     #[test]

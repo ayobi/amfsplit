@@ -62,7 +62,8 @@ enum Command {
 struct ArmArgs {
     /// The rules to apply, comma-separated, run in protocol order: r5 or r5s (the Rhizoglomus motif
     /// step, by VT or with the SSU fallback), r1a or r1b (unnamed cultures as taxa: inside or block),
-    /// r2 (the inside gate), then one R3 flag arm: r3a, r3a_all (all markers) or r3b (placement)
+    /// r2 (the inside gate), r7 (genus-clade fallback, only with an R3 arm), then one R3 flag arm:
+    /// r3a, r3a_all (all markers) or r3b (placement)
     #[arg(long, value_delimiter = ',', required = true)]
     rule: Vec<String>,
     /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's
@@ -84,6 +85,10 @@ struct ArmArgs {
     /// The EUKARYOME test's locked roles (benchmarks/eukaryome/predictions.predictions.tsv), for --score eukaryome
     #[arg(long)]
     euk_predictions: Option<PathBuf>,
+    /// The queries' own placement table (e.g. runs_euk/A/05_summary/lsu_placements.copies.tsv.gz), for R7
+    /// on sequences outside the culture reference
+    #[arg(long)]
+    query_placements: Option<PathBuf>,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
@@ -101,7 +106,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
     };
     let rules: Vec<&str> = a.rule.iter().map(String::as_str).collect();
-    let r = amfsplit_naming::run_rules_on_tables(&naming_data(), &rules, &pairs, &extra)?;
+    let r = amfsplit_naming::run_rules_with_placements(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref())?;
     if let Some(design) = &a.score {
         let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
         println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",

@@ -36,6 +36,12 @@
 //! culture of the given genus on any marker (r3a) or on all markers (r3a_all, the sensitivity).
 //! R3b (placement) flags when the best LSU placement's pendant length exceeds R3B_CUT, the 99th
 //! percentile of that length among the 803 culture main-type sequences of the 37 LSU-removal rounds.
+//!
+//! R7, the genus-clade fallback: a new-lineage call takes the genus of the V18 genus clade its LSU
+//! places in, when that clade's unit is held by two or more training cultures, all of one genus that
+//! agrees with the clade's label (code G2; never a species). Holders are training cultures whose
+//! bridge-eligible main-type copies place in the unit, as the frozen LSU arm counts them. It runs only
+//! with an R3 arm, after R2 and before the flag.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -50,9 +56,49 @@ pub const R1A_COLUMNS: [&str; 3] = ["r1a_unnamed_inside", "r1a_named_inside", "r
 pub const R1B_COLUMNS: [&str; 2] = ["r1b_blocking_units", "r1b_unnamed_holders"];
 pub const R5_COLUMNS: [&str; 3] = ["r5_motif", "r5_rhizoglomus_evidence", "r5_action"];
 pub const R3_COLUMNS: [&str; 3] = ["r3_genus", "r3_evidence", "r3_flag"];
+pub const R7_COLUMNS: [&str; 2] = ["r7_genus_clade_unit", "r7_action"];
 /// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
 /// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
-pub const RULES: [&str; 8] = ["r5", "r5s", "r1a", "r1b", "r2", "r3a", "r3a_all", "r3b"];
+pub const RULES: [&str; 9] = ["r5", "r5s", "r1a", "r1b", "r2", "r7", "r3a", "r3a_all", "r3b"];
+
+/// R7's genus-clade unit holders for one round: unit -> training cultures.
+fn genus_clade_holders(data: &FrozenData, training: &StringSet, placements: &BTreeMap<String, Row>) -> BTreeMap<String, StringSet> {
+    let mut h: BTreeMap<String, StringSet> = BTreeMap::new();
+    for (acc, c) in &data.copies {
+        if c.copy_class != "main" || !training.contains(&c.culture) { continue; }
+        let Some(p) = placements.get(acc) else { continue };
+        if p.get("bridge_alignment_eligible").map(String::as_str) != Some("1") { continue; }
+        if let Some(u) = p.get("external_genus_clade_unit").filter(|u| !u.is_empty()) { h.entry(u.clone()).or_default().insert(c.culture.clone()); }
+    }
+    h
+}
+
+/// R7 on rows; returns the number of genera given.
+fn apply_r7(data: &FrozenData, holders: &BTreeMap<String, StringSet>, rows: &mut [Row], placement: &dyn Fn(&str) -> Option<Row>) -> Result<usize> {
+    let mut given = 0;
+    for row in rows {
+        for c in R7_COLUMNS { row.insert(c.into(), String::new()); }
+        if row_value(row, "status")? != "novel lineage" { continue; }
+        let acc = row_value(row, "accession")?.to_owned();
+        let Some(p) = placement(&acc) else { continue };
+        let unit = p.get("external_genus_clade_unit").cloned().unwrap_or_default();
+        if unit.is_empty() { continue; }
+        row.insert("r7_genus_clade_unit".into(), unit.clone());
+        let label = normalise_genus(p.get("external_genus_clade").map(String::as_str).unwrap_or(""));
+        let hs = holders.get(&unit).cloned().unwrap_or_default();
+        let genera: BTreeSet<String> = hs.iter().map(|c| data.cultures.get(c).map(|m| m.genus.clone()).unwrap_or_default()).collect();
+        if hs.len() < 2 || genera.len() != 1 || !genera.contains(&label) { row.insert("r7_action".into(), "abstain".into()); continue; }
+        row.insert("status".into(), "novel species, genus known".into());
+        row.insert("call_genera".into(), label.clone());
+        row.insert("placement".into(), label.clone());
+        let reason = format!("G2 genus {label} from the V18 genus clade {unit}, held by {} training cultures of {label}", hs.len());
+        let existing = row_value(row, "reasons")?.to_owned();
+        row.insert("reasons".into(), if existing.is_empty() { reason } else { format!("{existing}; {reason}") });
+        row.insert("r7_action".into(), "G2".into());
+        given += 1;
+    }
+    Ok(given)
+}
 /// R3b's cut, by its definition (Protocol v3): the 99th percentile (exclusive) of the best LSU
 /// placement's pendant length among the 803 main-type query rows of the 37 species LSU-removal rounds
 /// (release 0.3.2, external_holdout_v2). A test re-derives it from the published rounds.
@@ -535,7 +581,15 @@ pub fn run_r2_on_tables(fixture_dir: &Path, tables: &[(std::path::PathBuf, std::
 /// The rules (`RULES`, applied in protocol order: R1a, then R2) on named-row tables; see
 /// `run_r2_on_tables`. `demoted` counts R2 demotions plus R1a's U1 calls.
 pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>) -> Result<ArmReport> {
+    run_rules_with_placements(fixture_dir, rules, tables, extra_windows, None)
+}
+
+/// As `run_rules_on_tables`, with the queries' own placement table for sequences outside the culture
+/// reference (R7 reads each query's genus clade from it).
+pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>) -> Result<ArmReport> {
     if rules.is_empty() || rules.iter().any(|r| !RULES.contains(r)) { bail!("rules must be among {}", RULES.join(", ")); }
+    if rules.contains(&"r7") && !rules.iter().any(|r| r.starts_with("r3")) { bail!("R7 runs only with an R3 arm (r3a, r3a_all or r3b)"); }
+    let qplace: BTreeMap<String, Row> = match query_placements { Some(p) => read_row_map(&read_table_any(p)?), None => BTreeMap::new() };
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
     let all: StringSet = data.cultures.keys().cloned().collect();
     let query = |m: &str, acc: &str| data.fa.get(m).and_then(|f| f.get(acc)).or_else(|| extra_windows.get(m).and_then(|f| f.get(acc))).cloned();
@@ -565,6 +619,7 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
         // LSU units come from the round's own placements when the table sits in an M4 round folder
         let round_placements = table.parent().and_then(|p| p.parent()).map(|r| r.join("05_summary/lsu_placements.copies.tsv")).filter(|p| p.is_file());
         let placements_path = round_placements.unwrap_or_else(|| frozen_placements.clone());
+        let place_rows: BTreeMap<String, Row> = if rules.contains(&"r7") { read_row_map(&read_table(&placements_path)?) } else { BTreeMap::new() };
         if rules.contains(&"r1b") && !psets_by.contains_key(&placements_path) {
             let placements = read_row_map(&read_table(&placements_path)?);
             psets_by.insert(placements_path.clone(), species_clade_sets(&data, &placements)?);
@@ -599,6 +654,12 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
                 demoted += blocks[&key].apply(&data, &mut part)?;
             }
             if rules.contains(&"r2") { demoted += rule.apply(&mut part, &query, &mut memo)?; }
+            if rules.contains(&"r7") {
+                let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                let training: StringSet = all.difference(&held_set).cloned().collect();
+                let holders = genus_clade_holders(&data, &training, &place_rows);
+                demoted += apply_r7(&data, &holders, &mut part, &|acc| qplace.get(acc).or_else(|| place_rows.get(acc)).cloned())?;
+            }
             if let Some(v) = r3.first() {
                 if *v != "r3b" && !genus_rules.contains_key(held) {
                     let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
@@ -614,6 +675,7 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
         if rules.contains(&"r1a") { headers.extend(R1A_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if rules.contains(&"r7") { headers.extend(R7_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if !r3.is_empty() { headers.extend(R3_COLUMNS.iter().map(|c| (*c).to_owned())); }
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();
