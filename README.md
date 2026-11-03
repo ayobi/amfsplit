@@ -1,4 +1,9 @@
-# amfsplit
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="amfsplit-logo-dark(1).png">
+    <img alt="AMFsplit" src="amfsplit-logo(1).png" width="480">
+  </picture>
+</p>
 
 Long-read SSU–ITS–LSU metabarcoding of arbuscular mycorrhizal fungi: from accurate long reads to
 names in the three systems surveys use (MaarjAM VT, UNITE SH, LSU species clade), a culture-linked
