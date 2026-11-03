@@ -63,14 +63,19 @@ struct ArmArgs {
     /// The rule to apply (so far: r2, the inside gate)
     #[arg(long, value_parser = ["r2"])]
     rule: String,
-    /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's table
-    #[arg(long)]
-    table: PathBuf,
+    /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's
+    /// table; repeat for several (with --out-dir), sharing one distance cache
+    #[arg(long, required = true)]
+    table: Vec<PathBuf>,
     /// Windows prefix for sequences outside the culture reference (<prefix>.full_its.fasta etc.)
     #[arg(short = 'w', long)]
     windows: Option<PathBuf>,
-    #[arg(short = 'o', long)]
-    out: PathBuf,
+    /// Output table (one --table)
+    #[arg(short = 'o', long, conflicts_with = "out_dir")]
+    out: Option<PathBuf>,
+    /// Output folder (several --table): each written as <its round folder>__<its file name>
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
@@ -91,8 +96,20 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
             extra.insert(m.to_owned(), seqs);
         }
     }
-    let r = amfsplit_naming::run_r2_on_table(&naming_data(), &a.table, &extra, &a.out)?;
-    println!("R2 on {} rows in {} rounds: {} of {} known calls demoted to N7; written to {}", r.rows, r.rounds, r.demoted, r.known_before, a.out.display());
+    let pairs: Vec<(PathBuf, PathBuf)> = match (&a.out, &a.out_dir) {
+        (Some(o), None) if a.table.len() == 1 => vec![(a.table[0].clone(), o.clone())],
+        (None, Some(d)) => {
+            std::fs::create_dir_all(d)?;
+            a.table.iter().map(|t| {
+                let round = t.parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let file = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                (t.clone(), d.join(format!("{round}__{file}")))
+            }).collect()
+        }
+        _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
+    };
+    let r = amfsplit_naming::run_r2_on_tables(&naming_data(), &pairs, &extra)?;
+    println!("R2 on {} rows in {} rounds of {} table(s): {} of {} known calls demoted to N7", r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())
 }

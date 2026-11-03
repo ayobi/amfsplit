@@ -10,7 +10,7 @@
 //! lacks are reported and left unchecked; a call checked on one marker or none fails (decided
 //! 2 November 2026). A failing call becomes "novel species, genus known", code N7.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
@@ -35,6 +35,30 @@ fn species_items(data: &FrozenData, training: &StringSet) -> BTreeMap<(&'static 
     items
 }
 
+/// Every distance R2 computes, once: sequences are interned, and a pair keeps its argument order
+/// (the distance's direction matters for equal lengths, as in the frozen code).
+#[derive(Default)]
+pub struct DistanceMemo {
+    ids: HashMap<String, usize>,
+    memo: HashMap<(usize, usize), f64>,
+}
+
+impl DistanceMemo {
+    fn id(&mut self, s: &str) -> usize {
+        if let Some(i) = self.ids.get(s) { return *i; }
+        let i = self.ids.len();
+        self.ids.insert(s.to_owned(), i);
+        i
+    }
+    fn d(&mut self, a: &str, b: &str) -> Result<f64> {
+        let key = (self.id(a), self.id(b));
+        if let Some(v) = self.memo.get(&key) { return Ok(*v); }
+        let v = percent_distance(a, b, -1)?.ok_or_else(|| anyhow!("no distance"))?;
+        self.memo.insert(key, v);
+        Ok(v)
+    }
+}
+
 pub struct InsideRule {
     items: BTreeMap<(&'static str, String), BTreeSet<(String, String)>>,
     /// per marker: the limit, or None when fewer than two values exist
@@ -43,7 +67,7 @@ pub struct InsideRule {
 
 impl InsideRule {
     /// species_groups.py: the 99th percentile of the nearest other-culture distance within a species.
-    pub(crate) fn fit(data: &FrozenData, training: &StringSet) -> Result<Self> {
+    pub(crate) fn fit(data: &FrozenData, training: &StringSet, memo: &mut DistanceMemo) -> Result<Self> {
         let items = species_items(data, training);
         let mut limits = BTreeMap::new();
         for (m, _) in INSIDE_MARKERS {
@@ -54,7 +78,7 @@ impl InsideRule {
                     let mut best: Option<f64> = None;
                     for (s2, c2) in set {
                         if c2 == c1 { continue; }
-                        let d = percent_distance(s1, s2, -1)?.ok_or_else(|| anyhow!("no distance"))?;
+                        let d = memo.d(s1, s2)?;
                         best = Some(best.map_or(d, |b: f64| b.min(d)));
                     }
                     if let Some(b) = best { vals.push(b); }
@@ -66,11 +90,11 @@ impl InsideRule {
     }
 
     /// Distance from a query window to the nearest training main-type sequence of a species.
-    fn nearest(&self, marker: &'static str, species: &str, query: &str) -> Result<Option<f64>> {
+    fn nearest(&self, marker: &'static str, species: &str, query: &str, memo: &mut DistanceMemo) -> Result<Option<f64>> {
         let Some(set) = self.items.get(&(marker, species.to_owned())) else { return Ok(None) };
         let mut best: Option<f64> = None;
         for (s, _) in set {
-            let d = percent_distance(query, s, -1)?.ok_or_else(|| anyhow!("no distance"))?;
+            let d = memo.d(query, s)?;
             best = Some(best.map_or(d, |b: f64| b.min(d)));
         }
         Ok(best)
@@ -83,7 +107,7 @@ impl InsideRule {
 
     /// Apply the gate to rows named with these training cultures. `query(marker, accession)` gives a
     /// sequence's window. Returns the number of calls demoted.
-    pub(crate) fn apply(&self, rows: &mut [Row], query: &dyn Fn(&str, &str) -> Option<String>) -> Result<usize> {
+    pub(crate) fn apply(&self, rows: &mut [Row], query: &dyn Fn(&str, &str) -> Option<String>, memo: &mut DistanceMemo) -> Result<usize> {
         let limits = self.limits_text();
         let mut demoted = 0;
         for row in rows {
@@ -103,7 +127,7 @@ impl InsideRule {
                 let mut checked = 0;
                 for (m, lab, w) in &windows {
                     let (Some(w), Some(t)) = (w, self.limits[m]) else { continue };
-                    let Some(d) = self.nearest(m, sp, w)? else { continue };
+                    let Some(d) = self.nearest(m, sp, w, memo)? else { continue };
                     checked += 1;
                     if d > t { fails.push(*lab); }
                 }
@@ -137,32 +161,42 @@ pub struct ArmReport {
     pub limits: Vec<String>,
 }
 
-/// R2 on a named-row table (any frozen or published v1/v2 table with `held_cultures`): each row's
+/// R2 on named-row tables (any frozen or published v1/v2 table with `held_cultures`): each row's
 /// training set is every reference culture outside its held cultures, so each round gets its own
 /// limits. Windows come from the culture reference, then from `extra_windows` (marker -> sequences)
-/// for sequences outside it. Writes the table with the R2 columns appended.
-pub fn run_r2_on_table(fixture_dir: &Path, table: &Path, extra_windows: &BTreeMap<String, SeqMap>, out: &Path) -> Result<ArmReport> {
+/// for sequences outside it. Writes each table to its output with the R2 columns appended; one
+/// distance memo serves every table and round.
+pub fn run_r2_on_tables(fixture_dir: &Path, tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>) -> Result<ArmReport> {
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
-    let t = read_table_any(table)?;
-    if !t.headers.iter().any(|h| h == "held_cultures") { bail!("{} has no held_cultures column", table.display()); }
     let all: StringSet = data.cultures.keys().cloned().collect();
-    let mut by_round: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, r) in t.rows.iter().enumerate() { by_round.entry(row_value(r, "held_cultures")?.to_owned()).or_default().push(i); }
-    let mut rows = t.rows.clone();
-    let known_before = rows.iter().filter(|r| r.get("status").is_some_and(|s| s.starts_with("known"))).count();
     let query = |m: &str, acc: &str| data.fa.get(m).and_then(|f| f.get(acc)).or_else(|| extra_windows.get(m).and_then(|f| f.get(acc))).cloned();
-    let (mut demoted, mut limits) = (0, BTreeSet::new());
-    for (held, idx) in &by_round {
-        let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
-        let training: StringSet = all.difference(&held_set).cloned().collect();
-        let rule = InsideRule::fit(&data, &training)?;
-        limits.insert(rule.limits_text());
-        let mut part: Vec<Row> = idx.iter().map(|i| rows[*i].clone()).collect();
-        demoted += rule.apply(&mut part, &query)?;
-        for (i, r) in idx.iter().zip(part) { rows[*i] = r; }
+    let mut memo = DistanceMemo::default();
+    let mut fits: BTreeMap<String, InsideRule> = BTreeMap::new();
+    let (mut n_rows, mut known_before, mut demoted, mut rounds, mut limits) = (0, 0, 0, BTreeSet::new(), BTreeSet::new());
+    for (table, out) in tables {
+        let t = read_table_any(table)?;
+        if !t.headers.iter().any(|h| h == "held_cultures") { bail!("{} has no held_cultures column", table.display()); }
+        let mut by_round: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (i, r) in t.rows.iter().enumerate() { by_round.entry(row_value(r, "held_cultures")?.to_owned()).or_default().push(i); }
+        let mut rows = t.rows.clone();
+        known_before += rows.iter().filter(|r| r.get("status").is_some_and(|s| s.starts_with("known"))).count();
+        for (held, idx) in &by_round {
+            if !fits.contains_key(held) {
+                let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                let training: StringSet = all.difference(&held_set).cloned().collect();
+                fits.insert(held.clone(), InsideRule::fit(&data, &training, &mut memo)?);
+            }
+            let rule = &fits[held];
+            limits.insert(rule.limits_text());
+            rounds.insert(held.clone());
+            let mut part: Vec<Row> = idx.iter().map(|i| rows[*i].clone()).collect();
+            demoted += rule.apply(&mut part, &query, &mut memo)?;
+            for (i, r) in idx.iter().zip(part) { rows[*i] = r; }
+        }
+        let mut headers = t.headers.clone();
+        headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned()));
+        std::fs::write(out, serialize_table(&headers, &rows))?;
+        n_rows += rows.len();
     }
-    let mut headers = t.headers.clone();
-    headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned()));
-    std::fs::write(out, serialize_table(&headers, &rows))?;
-    Ok(ArmReport { rows: rows.len(), known_before, demoted, rounds: by_round.len(), limits: limits.into_iter().collect() })
+    Ok(ArmReport { rows: n_rows, known_before, demoted, rounds: rounds.len(), limits: limits.into_iter().collect() })
 }

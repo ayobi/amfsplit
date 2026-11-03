@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{run_r2_on_table, ArmReport, INSIDE_MARKERS, R2_COLUMNS};
+pub use rules::{run_r2_on_tables, ArmReport, INSIDE_MARKERS, R2_COLUMNS};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
 pub use gate3::{run_gate3, Gate3Options, Gate3Report};
 pub use evidence::{load_reference, reduce_hits, run_blast, run_evidence_parity, EvidenceReport, DATABASE_PINS, EVIDENCE_ARMS};
@@ -1400,7 +1400,7 @@ mod tests {
         let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/inputs/benchmark");
         let data = FrozenData::load(&fx).unwrap();
         let all: StringSet = data.cultures.keys().cloned().collect();
-        let rule = rules::InsideRule::fit(&data, &all).unwrap();
+        let rule = rules::InsideRule::fit(&data, &all, &mut rules::DistanceMemo::default()).unwrap();
         for (m, want) in [("full_its", 5.988026607538803), ("LSU_LROR-FLR2", 3.0269792549075722), ("ssu_flank", 0.806517311608961)] {
             let got = rule.limits[m].unwrap();
             assert!((got - want).abs() < 1e-12, "{m}: {got} against the frozen {want}");
