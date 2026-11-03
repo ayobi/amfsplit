@@ -1411,7 +1411,10 @@ mod tests {
 
     fn r2_scores(tables: &[(std::path::PathBuf, &str)], windows: &BTreeMap<String, SeqMap>) -> BTreeMap<String, (usize, usize, usize)> {
         let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
-        let out = std::env::temp_dir().join(format!("amfsplit-r2-test-{}", std::process::id()));
+        // tests run as threads of one process, so each call gets its own folder
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let out = std::env::temp_dir().join(format!("amfsplit-r2-test-{}-{call}", std::process::id()));
         std::fs::create_dir_all(&out).unwrap();
         let pairs: Vec<_> = tables.iter().enumerate().map(|(i, (t, _))| (t.clone(), out.join(format!("{i}.tsv")))).collect();
         let report = rules::run_r2_on_tables(&fx, &pairs, windows).unwrap();
