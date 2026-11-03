@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, R7_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1625,6 +1625,43 @@ mod tests {
         assert_eq!(got["EUKARYOME: absent species in v4 genera, new lineages: right genus given"], (29, 0, 27));
         assert_eq!(got["EUKARYOME: absent lineages (Nanoglomus aside): wrong genus given"], (1468, 0, 24));
         assert_eq!(got["EUKARYOME: absent lineages given a genus: flagged by R3"], (24, 0, 17));
+    }
+
+    #[test]
+    fn r8_flags_no_v4_holdout_new_lineage() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        for rule in ["r8", "r8d"] {
+            let (got, _) = rule_scores(&[rule], &[(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"), (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+            assert_eq!(got["culture holdout: new lineages resting on one marker"], (28, 0, 0), "{rule}");
+            assert_eq!(got["species holdout: new lineages resting on one marker"], (379, 0, 0), "{rule}");
+            assert_eq!(got["species holdout: false known"], (803, 18, 18), "{rule}");
+        }
+    }
+
+    #[test]
+    fn r8_development_estimates() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R8 estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let mut rounds = Vec::new();
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            if !d.file_name().unwrap().to_string_lossy().starts_with("species_") { continue; }
+            for k in ["external_holdout_v2", "full_reference_v2"] { rounds.push((d.join(format!("06_evaluation_v2/{k}.copies.tsv")), "rounds")); }
+        }
+        let (got, _) = rule_scores(&["r8"], &rounds, &BTreeMap::new());
+        assert_eq!(got["LSU-removal rounds: new lineages resting on one marker, V18 removed"], (360, 0, 0));
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let (got, _) = rule_scores(&["r8"], &[(m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), "longglodb")], &lw);
+        assert_eq!(got["LongGloDB: new lineages resting on one marker"], (101, 0, 31));
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let (got, rows) = rule_scores(&["r8d"], &[(m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz"), "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: new lineages resting on one marker"], (2186, 0, 77));
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 13));
+        assert_eq!(rows.iter().filter(|r| r["status"] == "insufficient evidence").count(), 77);
     }
 
     #[test]

@@ -62,7 +62,8 @@ enum Command {
 struct ArmArgs {
     /// The rules to apply, comma-separated, run in protocol order: r5 or r5s (the Rhizoglomus motif
     /// step, by VT or with the SSU fallback), r1a or r1b (unnamed cultures as taxa: inside or block),
-    /// r2 (the inside gate), r7 (genus-clade fallback, only with an R3 arm), then one R3 flag arm:
+    /// r2 (the inside gate), r7 (genus-clade fallback, only with an R3 arm), r8 or r8d (novelty on
+    /// one marker: flag, or demote), then one R3 flag arm:
     /// r3a, r3a_all (all markers) or r3b (placement)
     #[arg(long, value_delimiter = ',', required = true)]
     rule: Vec<String>,
@@ -118,7 +119,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
         println!("scores written to {}", path.display());
     }
-    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed or flagged (R5 D4, R1a U1, R1b U2, R2 N7, R3 G1; {} known calls before)",
+    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed or flagged (R5 D4, R1a U1, R1b U2, R2 N7, R7 G2, R8 N8, R3 G1; {} known calls before)",
              rules.join("+"), r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())

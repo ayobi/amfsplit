@@ -42,6 +42,10 @@
 //! agrees with the clade's label (code G2; never a species). Holders are training cultures whose
 //! bridge-eligible main-type copies place in the unit, as the frozen LSU arm counts them. It runs only
 //! with an R3 arm, after R2 and before the flag.
+//!
+//! R8, novelty on one marker: a new lineage resting on one unmatched arm, with the other two arms no
+//! call, keeps its call and carries flag N8 (r8). The variant R8d (r8d) demotes it to "insufficient
+//! evidence", neither known nor new. It runs after R7 and before the R3 flag.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -57,9 +61,37 @@ pub const R1B_COLUMNS: [&str; 2] = ["r1b_blocking_units", "r1b_unnamed_holders"]
 pub const R5_COLUMNS: [&str; 3] = ["r5_motif", "r5_rhizoglomus_evidence", "r5_action"];
 pub const R3_COLUMNS: [&str; 3] = ["r3_genus", "r3_evidence", "r3_flag"];
 pub const R7_COLUMNS: [&str; 2] = ["r7_genus_clade_unit", "r7_action"];
+pub const R8_COLUMNS: [&str; 1] = ["r8_action"];
 /// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
 /// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
-pub const RULES: [&str; 9] = ["r5", "r5s", "r1a", "r1b", "r2", "r7", "r3a", "r3a_all", "r3b"];
+pub const RULES: [&str; 11] = ["r5", "r5s", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r3a", "r3a_all", "r3b"];
+
+/// R8 (flag) or R8d (demote) on rows; returns the number of calls flagged or demoted.
+fn apply_r8(demote: bool, rows: &mut [Row]) -> Result<usize> {
+    let mut n = 0;
+    for row in rows {
+        row.insert("r8_action".into(), String::new());
+        if row_value(row, "status")? != "novel lineage" { continue; }
+        let states: Vec<(&str, String)> = ["VT", "SH", "LSU"].iter().map(|a| Ok((*a, row_value(row, &format!("{a}_state"))?.to_owned()))).collect::<Result<_>>()?;
+        let unmatched: Vec<&str> = states.iter().filter(|(_, s)| s == "unmatched").map(|(a, _)| *a).collect();
+        let no_call = states.iter().filter(|(_, s)| s == "no call").count();
+        if unmatched.len() != 1 || no_call != 2 { continue; }
+        let text = format!("N8 new lineage resting on one unmatched arm ({}); the other two arms make no call", unmatched[0]);
+        let col = if demote { "reasons" } else { "flags" };
+        let existing = row_value(row, col)?.to_owned();
+        row.insert(col.into(), if existing.is_empty() { text } else { format!("{existing}; {text}") });
+        if demote {
+            row.insert("status".into(), "insufficient evidence".into());
+            row.insert("placement".into(), String::new());
+            row.insert("novelty_claim".into(), "not_asserted".into());
+            row.insert("r8_action".into(), "R8d".into());
+        } else {
+            row.insert("r8_action".into(), "N8".into());
+        }
+        n += 1;
+    }
+    Ok(n)
+}
 
 /// R7's genus-clade unit holders for one round: unit -> training cultures.
 fn genus_clade_holders(data: &FrozenData, training: &StringSet, placements: &BTreeMap<String, Row>) -> BTreeMap<String, StringSet> {
@@ -589,6 +621,7 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
 pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>) -> Result<ArmReport> {
     if rules.is_empty() || rules.iter().any(|r| !RULES.contains(r)) { bail!("rules must be among {}", RULES.join(", ")); }
     if rules.contains(&"r7") && !rules.iter().any(|r| r.starts_with("r3")) { bail!("R7 runs only with an R3 arm (r3a, r3a_all or r3b)"); }
+    if rules.contains(&"r8") && rules.contains(&"r8d") { bail!("r8 and r8d are variants of one rule; choose one"); }
     let qplace: BTreeMap<String, Row> = match query_placements { Some(p) => read_row_map(&read_table_any(p)?), None => BTreeMap::new() };
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
     let all: StringSet = data.cultures.keys().cloned().collect();
@@ -660,6 +693,7 @@ pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(
                 let holders = genus_clade_holders(&data, &training, &place_rows);
                 demoted += apply_r7(&data, &holders, &mut part, &|acc| qplace.get(acc).or_else(|| place_rows.get(acc)).cloned())?;
             }
+            if rules.contains(&"r8") || rules.contains(&"r8d") { demoted += apply_r8(rules.contains(&"r8d"), &mut part)?; }
             if let Some(v) = r3.first() {
                 if *v != "r3b" && !genus_rules.contains_key(held) {
                     let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
@@ -676,6 +710,7 @@ pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(
         if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r7") { headers.extend(R7_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if rules.contains(&"r8") || rules.contains(&"r8d") { headers.extend(R8_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if !r3.is_empty() { headers.extend(R3_COLUMNS.iter().map(|c| (*c).to_owned())); }
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();

@@ -163,6 +163,22 @@ fn r7_new_lineages(data: &FrozenData, design: &str, results: &[TableResult]) -> 
     Ok(vec![summarize(design, "new-lineage calls given the right genus", right), summarize(design, "new-lineage calls given a wrong genus", wrong)])
 }
 
+fn has_r8(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r8_action"))) }
+
+/// R8: frozen new lineages (every copy class) flagged N8 or demoted by R8d, by table kind.
+fn r8_new_lineages(design: &str, results: &[TableResult], kind: &dyn Fn(&TableResult) -> Option<String>) -> Result<Vec<OutcomeScore>> {
+    let mut by: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
+    for t in results {
+        let Some(k) = kind(t) else { continue };
+        for (f, a) in pairs(t)? {
+            if col(f, "status") != "novel lineage" { continue; }
+            let cluster = col(f, "organism").to_owned();
+            by.entry(k.clone()).or_default().push(Unit { cluster, frozen: false, arm: !col(a, "r8_action").is_empty() });
+        }
+    }
+    Ok(by.into_iter().map(|(k, u)| summarize(design, &format!("new lineages resting on one marker{}{k}", if k.is_empty() { "" } else { ", " }), u)).collect())
+}
+
 fn has_r3(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r3_flag"))) }
 
 /// Short-5.8S divergent copies called divergent, clustered by species (or culture, when unnamed).
@@ -202,6 +218,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             out.push(summarize("culture holdout", "exact species calls", ex));
             out.push(summarize("culture holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
             if has_r3(results) { out.extend(genus_flags(data, "culture holdout", results, &|_| Some(String::new()))?); }
+            if has_r8(results) { out.extend(r8_new_lineages("culture holdout", results, &|_| Some(String::new()))?); }
         }
         "species" => {
             let mut fk = Vec::new();
@@ -216,6 +233,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             out.push(summarize("species holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
             if has_r3(results) { out.extend(genus_flags(data, "species holdout", results, &|_| Some(String::new()))?); }
             if has_r7(results) { out.extend(r7_new_lineages(data, "species holdout", results)?); }
+            if has_r8(results) { out.extend(r8_new_lineages("species holdout", results, &|_| Some(String::new()))?); }
         }
         "rounds" => {
             let mut by_kind: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
@@ -239,6 +257,15 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 }
             }
             for (kind, units) in by_kind { out.push(summarize("LSU-removal rounds", &kind, units)); }
+            if has_r8(results) {
+                // every species round, as the protocol counted them
+                let kind = |t: &TableResult| -> Option<String> {
+                    let key = t.table.parent()?.parent()?.file_name()?.to_string_lossy().into_owned();
+                    if !key.starts_with("species_") { return None; }
+                    Some(if t.table.file_name()?.to_string_lossy().starts_with("external_holdout") { "V18 removed".into() } else { "V18 intact".into() })
+                };
+                out.extend(r8_new_lineages("LSU-removal rounds", results, &kind)?);
+            }
             if has_r7(results) {
                 // genus right among first-outcome main rows whose genus another training culture holds
                 let mut by: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
@@ -310,6 +337,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.push(summarize("LongGloDB", "absent species in v4 genera: genus right", sp));
                 out.push(summarize("LongGloDB", "absent genera: a genus given (wrong)", ag));
             }
+            if has_r8(results) { out.extend(r8_new_lineages("LongGloDB", results, &|_| Some(String::new()))?); }
         }
         "eukaryome" => {
             let path = euk_predictions.ok_or_else(|| anyhow!("design eukaryome needs the test's predictions.predictions.tsv"))?;
@@ -366,6 +394,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.push(summarize("EUKARYOME", "absent lineages (Nanoglomus aside): wrong genus given", ag));
                 out.push(summarize("EUKARYOME", "absent lineages given a genus: flagged by R3", agf));
             }
+            if has_r8(results) { out.extend(r8_new_lineages("EUKARYOME", results, &|_| Some(String::new()))?); }
         }
         _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome)"),
     }
