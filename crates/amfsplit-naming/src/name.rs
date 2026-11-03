@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-use super::evidence::{best_unit, culture_accessions, load_reference, reduce_hits_ordered, run_blast_db, RefRecord, DATABASE_PINS, MAX_EVALUE};
+use super::evidence::{best_unit, culture_accessions, load_reference, reduce_hits_with, run_blast_db, RefRecord, DATABASE_PINS, MAX_EVALUE};
 use super::external::{augment, placements_for, TestCopy, TestCulture};
 use super::placement::read_fasta_ordered;
 use super::*;
@@ -184,6 +184,8 @@ pub struct NameOptions {
     pub epa_ng: Option<String>,
     /// a named-row table to compare with, on the shared columns
     pub compare_with: Option<PathBuf>,
+    /// V (Protocol v3): VT coverage over the part of each MaarjAM reference the sequence spans
+    pub vt_spanned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -235,32 +237,36 @@ pub fn run_name(o: &NameOptions) -> Result<NameReport> {
         fs::write(path, s).map_err(Into::into)
     };
 
-    // 1. VT and SH evidence (cached in work/evidence.json)
-    let cache = work.join("evidence.json");
-    let evidence_reused = cache.is_file();
+    // 1. VT and SH evidence, cached per arm (work/evidence.json; work/evidence_vt_spanned.json under V)
+    let cache = work.join(if o.vt_spanned { "evidence_vt_spanned.json" } else { "evidence.json" });
+    let mut arms: serde_json::Map<String, Value> = if cache.is_file() {
+        match serde_json::from_str::<Value>(&fs::read_to_string(&cache)?)? { Value::Object(m) => m, _ => bail!("{} is not an evidence cache", cache.display()) }
+    } else { serde_json::Map::new() };
+    let evidence_reused = NAME_ARMS.iter().all(|(arm, ..)| arms.contains_key(*arm));
     if !evidence_reused {
         let m = manifest()?;
         let blastn = tool(&m, "blastn", &o.blastn)?;
         let drop = culture_copies.clone();
-        let mut arms = serde_json::Map::new();
         for (arm, _, region, task, min_id, min_cov) in NAME_ARMS {
+            if arms.contains_key(arm) { continue; }
+            let spanned = o.vt_spanned && arm == "VT";
             let stem = o.db.join("blast").join(arm.to_lowercase());
             let refs: BTreeMap<String, RefRecord> = read_table(&stem.with_extension("refs.tsv"))?.rows.iter().map(|r| Ok((row_value(r, "rid")?.to_owned(),
                 RefRecord { label: row_value(r, "label")?.to_owned(), acc: row_value(r, "acc")?.to_owned(), n_n: row_value(r, "n_N")?.parse()? }))).collect::<Result<_>>()?;
             let qpath = work.join(format!("{}.queries.fasta", arm.to_lowercase()));
             write_queries(region, &qpath)?;
-            let hits = run_blast_db(&qpath, &stem, task, o.blast_threads, &blastn)?;
+            let hits = run_blast_db(&qpath, &stem, task, o.blast_threads, &blastn, spanned)?;
             let mut qs = serde_json::Map::new();
             for x in &ids {
                 let h = hits.get(x).map(Vec::as_slice).unwrap_or(&[]);
-                let (units, anchor) = reduce_hits_ordered(h, &refs, min_cov, MAX_EVALUE, min_id, &drop)?;
+                let (units, anchor) = reduce_hits_with(h, &refs, min_cov, MAX_EVALUE, min_id, &drop, spanned)?;
                 let (bu, bp) = best_unit(&units, h, &refs);
                 let unit_pident: BTreeMap<String, f64> = units.into_iter().collect();
                 qs.insert(x.clone(), serde_json::json!({"unit_pident": unit_pident, "anchor_pident": anchor, "best": [bu, bp]}));
             }
             arms.insert(arm.into(), Value::Object(qs));
         }
-        fs::write(&cache, serde_json::to_string(&Value::Object(arms))?)?;
+        fs::write(&cache, serde_json::to_string(&Value::Object(arms.clone()))?)?;
     }
     let evidence: Value = serde_json::from_str(&fs::read_to_string(&cache)?)?;
 

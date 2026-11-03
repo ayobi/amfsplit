@@ -1720,6 +1720,18 @@ mod tests {
     }
 
     #[test]
+    fn spanned_coverage_follows_the_frozen_function() {
+        // lgdb_test.py spanned_coverage on hand-checked hits (V, LongGloDB amendment 2)
+        let hit = |qstart, qend, sstart, send, length, qlen, slen| evidence::Hit { reference: String::new(), pident: 100.0, length, qlen, slen,
+            evalue: 0.0, bitscore: 0.0, qstart, qend, sstart, send };
+        // the reference runs 100 bases left and 200 right of a full-length query: those are discounted
+        assert_eq!(evidence::spanned_coverage(&hit(1, 500, 101, 600, 500, 500, 800), 0), 1.0);
+        assert_eq!(evidence::spanned_coverage(&hit(1, 500, 600, 101, 500, 500, 800), 0), 1.0);
+        // 20 query bases before the alignment, 10 reference Ns: 480 / (800 - 10 - 320)
+        assert_eq!(evidence::spanned_coverage(&hit(21, 500, 1, 480, 480, 500, 800), 10), 480.0 / 470.0);
+    }
+
+    #[test]
     fn python_fsum_and_isclose_behaviour() {
         assert_eq!(placement::tests_support::fsum(vec![0.1; 10]), 1.0);
         assert_eq!(placement::tests_support::fsum(vec![1e100, 1.0, -1e100, 1e-100]), 1.0);

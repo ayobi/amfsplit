@@ -48,6 +48,11 @@ pub struct Hit {
     pub slen: i64,
     pub evalue: f64,
     pub bitscore: f64,
+    /// alignment coordinates (only from a coordinate search, for V); 0 otherwise
+    pub qstart: i64,
+    pub qend: i64,
+    pub sstart: i64,
+    pub send: i64,
 }
 
 /// `ACC.match`: 1 or 2 capitals, an optional underscore and at least five digits at the start.
@@ -199,7 +204,7 @@ pub fn run_blast(query: &Path, ref_fasta: &str, workdir: &Path, name: &str, task
         if f.len() != 8 { bail!("unexpected blastn line: {line}"); }
         hits.entry(f[0].to_owned()).or_default().push(Hit {
             reference: f[1].to_owned(), pident: f[2].parse()?, length: f[3].parse()?, qlen: f[4].parse()?,
-            slen: f[5].parse()?, evalue: f[6].parse()?, bitscore: f[7].parse()?,
+            slen: f[5].parse()?, evalue: f[6].parse()?, bitscore: f[7].parse()?, qstart: 0, qend: 0, sstart: 0, send: 0,
         });
     }
     Ok(hits)
@@ -214,6 +219,18 @@ pub fn reduce_hits(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f6
     Ok((ids.into_iter().collect(), anchor))
 }
 
+/// lgdb_test.py `spanned_coverage` (V, LongGloDB amendment 2): coverage with the reference bases that lie
+/// beyond the ends of the query discounted, as reference Ns already are.
+pub(crate) fn spanned_coverage(h: &Hit, n_n: i64) -> f64 {
+    let (s_lo, s_hi) = (h.sstart.min(h.send), h.sstart.max(h.send));
+    let (left, right) = if h.sstart <= h.send {
+        (0.max((s_lo - 1) - (h.qstart - 1)), 0.max((h.slen - s_hi) - (h.qlen - h.qend)))
+    } else {
+        (0.max((s_lo - 1) - (h.qlen - h.qend)), 0.max((h.slen - s_hi) - (h.qstart - 1)))
+    };
+    h.length as f64 / (h.qlen.min(1.max(h.slen - n_n - left - right))) as f64
+}
+
 /// The best unit as the frozen culture tables record it (arm_sets.py: `sorted(ids.items(), key=-pident)[0]`):
 /// the top identity, ties to the unit whose first hit comes first in BLAST's output.
 pub(crate) fn first_top(ids: &[(String, f64)]) -> (String, f64) {
@@ -224,12 +241,18 @@ pub(crate) fn first_top(ids: &[(String, f64)]) -> (String, f64) {
 /// `vt_hits` with the units in the order their first passing hit appears (Python dict order).
 pub(crate) fn reduce_hits_ordered(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f64, max_ev: f64, min_id: f64,
                    drop: &StringSet) -> Result<(Vec<(String, f64)>, Option<f64>)> {
+    reduce_hits_with(hits, refs, min_cov, max_ev, min_id, drop, false)
+}
+
+/// `vt_hits`, or with `spanned` lgdb_test.py `vt_hits_spanned`: nothing differs but the coverage.
+pub(crate) fn reduce_hits_with(hits: &[Hit], refs: &BTreeMap<String, RefRecord>, min_cov: f64, max_ev: f64, min_id: f64,
+                   drop: &StringSet, spanned: bool) -> Result<(Vec<(String, f64)>, Option<f64>)> {
     let mut ids: Vec<(String, f64)> = Vec::new();
     let mut best: Option<(f64, f64)> = None;
     for h in hits {
         let info = refs.get(&h.reference).ok_or_else(|| anyhow!("BLAST hit on unknown record {}", h.reference))?;
         if drop.contains(base_acc(&info.acc)) { continue; }
-        let cov = h.length as f64 / (h.qlen.min(1.max(h.slen - info.n_n))) as f64;
+        let cov = if spanned { spanned_coverage(h, info.n_n) } else { h.length as f64 / (h.qlen.min(1.max(h.slen - info.n_n))) as f64 };
         if cov < min_cov || h.evalue > max_ev { continue; }
         match ids.iter_mut().find(|(u, _)| *u == info.label) {
             Some((_, p)) => { if h.pident > *p { *p = h.pident; } }
@@ -406,20 +429,22 @@ pub(crate) fn best_unit(ids: &[(String, f64)], hits: &[Hit], refs: &BTreeMap<Str
 }
 
 /// blastn against a database `db` built earlier (by `amfsplit db`); same arguments as `run_blast`.
-pub(crate) fn run_blast_db(query: &Path, db: &Path, task: &str, threads: usize, blastn: &str) -> Result<BTreeMap<String, Vec<Hit>>> {
+pub(crate) fn run_blast_db(query: &Path, db: &Path, task: &str, threads: usize, blastn: &str, coords: bool) -> Result<BTreeMap<String, Vec<Hit>>> {
+    let cols = if coords { "6 qseqid sseqid pident length qlen slen evalue bitscore qstart qend sstart send" } else { "6 qseqid sseqid pident length qlen slen evalue bitscore" };
     let out = std::process::Command::new(blastn)
         .args(["-task", task, "-query"]).arg(query).arg("-db").arg(db)
-        .args(["-dust", "no", "-outfmt", "6 qseqid sseqid pident length qlen slen evalue bitscore", "-evalue", "1e-10",
+        .args(["-dust", "no", "-outfmt", cols, "-evalue", "1e-10",
                "-max_target_seqs", "5000", "-max_hsps", "1", "-num_threads", &threads.to_string()])
         .output().with_context(|| format!("starting {blastn}"))?;
     if !out.status.success() { bail!("blastn failed: {}", String::from_utf8_lossy(&out.stderr)); }
     let mut hits: BTreeMap<String, Vec<Hit>> = BTreeMap::new();
     for line in String::from_utf8(out.stdout)?.lines() {
         let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 8 { bail!("unexpected blastn line: {line}"); }
+        if f.len() != if coords { 12 } else { 8 } { bail!("unexpected blastn line: {line}"); }
+        let c = |i: usize| -> Result<i64> { Ok(if coords { f[i].parse()? } else { 0 }) };
         hits.entry(f[0].to_owned()).or_default().push(Hit {
             reference: f[1].to_owned(), pident: f[2].parse()?, length: f[3].parse()?, qlen: f[4].parse()?,
-            slen: f[5].parse()?, evalue: f[6].parse()?, bitscore: f[7].parse()?,
+            slen: f[5].parse()?, evalue: f[6].parse()?, bitscore: f[7].parse()?, qstart: c(8)?, qend: c(9)?, sstart: c(10)?, send: c(11)?,
         });
     }
     Ok(hits)

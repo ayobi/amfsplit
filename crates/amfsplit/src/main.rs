@@ -222,6 +222,9 @@ struct NameArgs {
     /// Compare the named rows with this table (.tsv or .tsv.gz) on the shared columns
     #[arg(long)]
     compare_with: Option<PathBuf>,
+    /// V (Protocol v3, opt-in): VT coverage over the part of each MaarjAM reference the sequence spans
+    #[arg(long)]
+    vt_spanned: bool,
 }
 
 /// The shipped primer panel: beside an installed binary, else in this checkout.
@@ -286,6 +289,7 @@ fn name_cmd(a: NameArgs) -> Result<()> {
     let r = amfsplit_naming::run_name(&amfsplit_naming::NameOptions {
         windows, db: a.db, out: a.out.clone(), fixture_dir: naming_data(),
         blast_threads: a.blast_threads, epa_threads: a.epa_threads, blastn: a.blastn, mafft: a.mafft, epa_ng: a.epa_ng, compare_with: a.compare_with,
+        vt_spanned: a.vt_spanned,
     })?;
     println!("{} sequences named, {} skipped (missing windows); {}", r.named, r.skipped, a.out.join("calls.tsv").display());
     for (status, n) in &r.status_counts { println!("  {n:5}  {status}"); }
