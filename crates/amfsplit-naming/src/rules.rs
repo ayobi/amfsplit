@@ -16,6 +16,12 @@
 //! Divergent, artifact and discordant calls keep their call and gain flag U. A known call inside both
 //! a named species and an unnamed culture keeps its species, written as a group that includes the
 //! culture. Unnamed means a culture without a usable species name, as in the frozen data.
+//!
+//! R1b, unnamed cultures as taxa (block), the paper's alternative: a matched VT, SH or LSU unit held
+//! only by unnamed training cultures blocks a species. A known call becomes genus only, as N3 does
+//! ("novel species, genus known"), with code U2 and flag U naming the cultures. The holders are the
+//! naming code's own fits per round: the VT and SH trainers, and the LSU placement fit on the
+//! species-clade units of the round's placements.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -27,7 +33,62 @@ use super::*;
 pub const INSIDE_MARKERS: [(&str, &str); 3] = [("full_its", "ITS"), ("LSU_LROR-FLR2", "LSU"), ("ssu_flank", "SSU")];
 pub const R2_COLUMNS: [&str; 4] = ["r2_inside", "r2_failing_markers", "r2_unchecked_markers", "r2_limits_pct"];
 pub const R1A_COLUMNS: [&str; 3] = ["r1a_unnamed_inside", "r1a_named_inside", "r1a_action"];
-pub const RULES: [&str; 2] = ["r1a", "r2"];
+pub const R1B_COLUMNS: [&str; 2] = ["r1b_blocking_units", "r1b_unnamed_holders"];
+pub const RULES: [&str; 3] = ["r1a", "r1b", "r2"];
+
+/// R1b's unit holders for one round: arm -> unit -> training cultures holding it.
+pub(crate) struct BlockRule {
+    holders: BTreeMap<&'static str, BTreeMap<String, StringSet>>,
+}
+
+impl BlockRule {
+    pub(crate) fn fit(data: &FrozenData, trainers: &BTreeMap<String, Trainer>, psets: &BTreeMap<String, StringSet>, training: &StringSet) -> Result<Self> {
+        let mut holders = BTreeMap::new();
+        for arm in ["VT", "SH"] {
+            let t = trainers.get(arm).ok_or_else(|| anyhow!("no {arm} trainer"))?;
+            holders.insert(arm, t.fit(data, training)?.holders);
+        }
+        holders.insert("LSU", placement_fit(data, training, psets).holders);
+        Ok(Self { holders })
+    }
+
+    /// Returns the number of known calls blocked.
+    pub(crate) fn apply(&self, data: &FrozenData, rows: &mut [Row]) -> Result<usize> {
+        let code = |c: &str| c.split(" | ").nth(1).unwrap_or(c).to_owned();
+        let mut blocked = 0;
+        for row in rows {
+            for c in R1B_COLUMNS { row.insert(c.into(), String::new()); }
+            let status = row_value(row, "status")?.to_owned();
+            if status != "known species" && status != "known species group" { continue; }
+            let (mut units, mut cultures) = (Vec::new(), BTreeSet::new());
+            for arm in ["VT", "SH", "LSU"] {
+                if row_value(row, &format!("{arm}_state"))? != "matched" { continue; }
+                for u in row_value(row, &format!("{arm}_units"))?.split(',').filter(|u| !u.is_empty()) {
+                    let Some(h) = self.holders[arm].get(u) else { continue };
+                    if !h.is_empty() && h.iter().all(|c| !data.species.contains_key(c)) {
+                        units.push(format!("{arm} {u}"));
+                        cultures.extend(h.iter().map(|c| code(c)));
+                    }
+                }
+            }
+            if units.is_empty() { continue; }
+            let codes = cultures.into_iter().collect::<Vec<_>>().join(", ");
+            row.insert("r1b_blocking_units".into(), units.join("; "));
+            row.insert("r1b_unnamed_holders".into(), codes.clone());
+            let genus = row_value(row, "call_genera")?.to_owned();
+            row.insert("status".into(), "novel species, genus known".into());
+            row.insert("placement".into(), genus);
+            row.insert("novelty_claim".into(), "candidate_only".into());
+            for (col, text) in [("reasons", format!("U2 species blocked: {} held only by unnamed training culture(s) {codes} (genus only, as N3)", units.join("; "))),
+                                ("flags", format!("U unit held only by unnamed culture(s) {codes}"))] {
+                let existing = row_value(row, col)?.to_owned();
+                row.insert(col.into(), if existing.is_empty() { text } else { format!("{existing}; {text}") });
+            }
+            blocked += 1;
+        }
+        Ok(blocked)
+    }
+}
 
 /// Unique main-type sequences per (marker, species), training cultures only, each with its culture.
 fn species_items(data: &FrozenData, training: &StringSet) -> BTreeMap<(&'static str, String), BTreeSet<(String, String)>> {
@@ -273,6 +334,12 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
     let query = |m: &str, acc: &str| data.fa.get(m).and_then(|f| f.get(acc)).or_else(|| extra_windows.get(m).and_then(|f| f.get(acc))).cloned();
     let mut memo = DistanceMemo::default();
     let mut fits: BTreeMap<String, InsideRule> = BTreeMap::new();
+    let trainers: BTreeMap<String, Trainer> = if rules.contains(&"r1b") {
+        ["VT", "SH"].iter().map(|a| Ok(((*a).to_owned(), Trainer::new(&data, a)?))).collect::<Result<_>>()?
+    } else { BTreeMap::new() };
+    let frozen_placements = fixture_dir.join("placement/lsu_placements.copies.tsv");
+    let mut psets_by: BTreeMap<std::path::PathBuf, BTreeMap<String, StringSet>> = BTreeMap::new();
+    let mut blocks: BTreeMap<(String, std::path::PathBuf), BlockRule> = BTreeMap::new();
     let (mut n_rows, mut known_before, mut demoted, mut rounds, mut limits) = (0, 0, 0, BTreeSet::new(), BTreeSet::new());
     let mut results = Vec::new();
     for (table, out) in tables {
@@ -282,6 +349,13 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
         for (i, r) in t.rows.iter().enumerate() { by_round.entry(row_value(r, "held_cultures")?.to_owned()).or_default().push(i); }
         let mut rows = t.rows.clone();
         let frozen_rows = t.rows.clone();
+        // LSU units come from the round's own placements when the table sits in an M4 round folder
+        let round_placements = table.parent().and_then(|p| p.parent()).map(|r| r.join("05_summary/lsu_placements.copies.tsv")).filter(|p| p.is_file());
+        let placements_path = round_placements.unwrap_or_else(|| frozen_placements.clone());
+        if rules.contains(&"r1b") && !psets_by.contains_key(&placements_path) {
+            let placements = read_row_map(&read_table(&placements_path)?);
+            psets_by.insert(placements_path.clone(), species_clade_sets(&data, &placements)?);
+        }
         known_before += rows.iter().filter(|r| r.get("status").is_some_and(|s| s.starts_with("known"))).count();
         for (held, idx) in &by_round {
             if !fits.contains_key(held) {
@@ -294,11 +368,21 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
             rounds.insert(held.clone());
             let mut part: Vec<Row> = idx.iter().map(|i| rows[*i].clone()).collect();
             if rules.contains(&"r1a") { demoted += rule.apply_r1a(&data, &mut part, &query, &mut memo)?; }
+            if rules.contains(&"r1b") {
+                let key = (held.clone(), placements_path.clone());
+                if !blocks.contains_key(&key) {
+                    let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                    let training: StringSet = all.difference(&held_set).cloned().collect();
+                    blocks.insert(key.clone(), BlockRule::fit(&data, &trainers, &psets_by[&placements_path], &training)?);
+                }
+                demoted += blocks[&key].apply(&data, &mut part)?;
+            }
             if rules.contains(&"r2") { demoted += rule.apply(&mut part, &query, &mut memo)?; }
             for (i, r) in idx.iter().zip(part) { rows[*i] = r; }
         }
         let mut headers = t.headers.clone();
         if rules.contains(&"r1a") { headers.extend(R1A_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();

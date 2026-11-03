@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R2_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1444,6 +1444,51 @@ mod tests {
         assert_eq!(got["culture holdout: known species kept"], (755, 745, 745));
         assert_eq!(got["culture holdout: exact species calls"], (755, 697, 697));
         assert_eq!(got["species holdout: false known"], (803, 18, 18));
+    }
+
+    #[test]
+    fn r1b_leaves_the_v4_holdouts_unchanged() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let (got, _) = rule_scores(&["r1b"], &[(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"),
+                                              (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 745));
+        assert_eq!(got["culture holdout: exact species calls"], (755, 697, 697));
+        assert_eq!(got["species holdout: false known"], (803, 18, 18));
+    }
+
+    #[test]
+    fn r1b_development_estimates() {
+        // first computed 3 November 2026 by the arm code; Protocol v3, section 7
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R1b estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let table = m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz");
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let (got, rows) = rule_scores(&["r1b"], &[(table.clone(), "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 3));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 150));
+        let blocked: Vec<&Row> = rows.iter().filter(|r| !r["r1b_blocking_units"].is_empty()).collect();
+        assert_eq!(blocked.len(), 35);
+        assert!(blocked.iter().all(|r| r["r1b_blocking_units"].starts_with("LSU ")));
+        let (got, _) = rule_scores(&["r1b", "r2"], &[(table, "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 1));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 148));
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let (got, _) = rule_scores(&["r1b"], &[(m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), "longglodb")], &lw);
+        assert_eq!(got["LongGloDB: false known (absent taxa)"], (102, 4, 4));
+        assert_eq!(got["LongGloDB: known species kept"], (164, 136, 136));
+        let mut rounds = Vec::new();
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            if !d.file_name().unwrap().to_string_lossy().starts_with("species_") { continue; }
+            for k in ["external_holdout_v2", "full_reference_v2"] { rounds.push((d.join(format!("06_evaluation_v2/{k}.copies.tsv")), "rounds")); }
+        }
+        let (got, _) = rule_scores(&["r1b"], &rounds, &BTreeMap::new());
+        assert_eq!(got["LSU-removal rounds: false known, V18 removed"], (673, 53, 53));
+        assert_eq!(got["LSU-removal rounds: false known, V18 intact"], (673, 9, 9));
     }
 
     #[test]
