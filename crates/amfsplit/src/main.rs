@@ -107,8 +107,29 @@ fn db_cmd(a: DbArgs) -> Result<()> {
 #[derive(Args)]
 struct NameArgs {
     /// Prefix of the `amfsplit regions` output: <prefix>.ssu_flank.fasta, .full_its, .s58, .LSU_LROR-FLR2
-    #[arg(short = 'w', long)]
-    windows: PathBuf,
+    #[arg(short = 'w', long, conflicts_with = "reads")]
+    windows: Option<PathBuf>,
+    /// Or the reads themselves (FASTA/FASTQ, .gz OK): ITSxRust anchors, then `regions` with the paper's
+    /// Stage 1 options and the shipped panel, then naming
+    #[arg(short = 'i', long)]
+    reads: Option<PathBuf>,
+    /// ITSxRust --anchors-tsv for the reads, if already made (skips ITSxRust)
+    #[arg(short = 'a', long, requires = "reads")]
+    anchors: Option<PathBuf>,
+    /// ITSx fungal HMM profile for ITSxRust (F.hmm; the paper's has SHA-256 a8c38c5c...)
+    #[arg(long)]
+    hmm: Option<PathBuf>,
+    /// Read type: hifi (the paper's) or ont (ITSxRust ONT thresholds, 0.20 primer edit budget)
+    #[arg(long, default_value = "hifi", value_parser = ["hifi", "ont"])]
+    preset: String,
+    /// Primer panel for `regions` (default: the shipped amf_legacy_windows.tsv)
+    #[arg(long)]
+    panel: Option<PathBuf>,
+    #[arg(long, default_value = "itsxrust")]
+    itsxrust: String,
+    /// nhmmer threads for ITSxRust
+    #[arg(long, default_value_t = 8)]
+    hmmer_cpu: usize,
     /// Folder made by `amfsplit db`
     #[arg(long)]
     db: PathBuf,
@@ -134,9 +155,67 @@ struct NameArgs {
     compare_with: Option<PathBuf>,
 }
 
+/// The shipped primer panel: beside an installed binary, else in this checkout.
+fn default_panel() -> PathBuf {
+    if let Some(prefix) = std::env::current_exe().ok().and_then(|e| e.parent().and_then(|b| b.parent()).map(Path::to_path_buf)) {
+        let p = prefix.join("share/amfsplit/panels/amf_legacy_windows.tsv");
+        if p.is_file() { return p; }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../panels/amf_legacy_windows.tsv")
+}
+
+/// Reads to windows: ITSxRust anchors (unless given), then `regions` with the Stage 1 options of the
+/// paper (HiFi: --max-err-frac 0.15 --only-anchored --open-ends; ONT: 0.20 and ITSxRust's ONT
+/// thresholds as in run_stage1.sh). Returns the windows prefix.
+fn reads_to_windows(a: &NameArgs, reads: &Path) -> Result<PathBuf> {
+    let work = a.out.join("work/regions");
+    std::fs::create_dir_all(&work)?;
+    let anchors = match &a.anchors {
+        Some(t) => t.clone(),
+        None => {
+            let hmm = a.hmm.as_ref().ok_or_else(|| anyhow::anyhow!("--reads needs --hmm (the ITSx fungal profile F.hmm) or --anchors (ITSxRust --anchors-tsv)"))?;
+            let itsx = a.out.join("work/itsx");
+            std::fs::create_dir_all(&itsx)?;
+            let anchors = itsx.join("reads.anchors.tsv");
+            let mut cmd = std::process::Command::new(&a.itsxrust);
+            cmd.arg("extract").arg("-i").arg(reads).arg("--hmm").arg(hmm).args(["--preset", &a.preset]);
+            if a.preset == "ont" { cmd.args(["--inc-e", "1e-3", "--min-anchor-score", "15", "--max-anchor-evalue", "1e-3"]); }
+            cmd.args(["--hmmer-cpu", &a.hmmer_cpu.to_string(), "--region", "all", "-o"]).arg(itsx.join("reads"))
+                .args(["--output-format", "fasta", "--plain-ids", "--anchors-tsv"]).arg(&anchors)
+                .arg("--qc-json").arg(itsx.join("reads.qc.json")).arg("--write-skipped").arg(itsx.join("reads.skipped.fasta"));
+            let log = std::fs::File::create(itsx.join("itsxrust.log"))?;
+            let status = cmd.stdout(log.try_clone()?).stderr(log).status()
+                .with_context(|| format!("starting {} (install ITSxRust 0.3.0, e.g. from Bioconda)", a.itsxrust))?;
+            if !status.success() { anyhow::bail!("ITSxRust failed ({status}); see {}", itsx.join("itsxrust.log").display()); }
+            use sha2::{Digest, Sha256};
+            let hmm_sha = format!("{:x}", Sha256::digest(std::fs::read(hmm)?));
+            std::fs::write(itsx.join("hmm.sha256"), format!("{hmm_sha}  {}\n", hmm.display()))?;
+            if !hmm_sha.starts_with("a8c38c5c") { eprintln!("note: {} is not the paper's F.hmm (SHA-256 a8c38c5c...)", hmm.display()); }
+            anchors
+        }
+    };
+    let prefix = work.join("reads");
+    let panel = a.panel.clone().unwrap_or_else(default_panel);
+    let err = if a.preset == "ont" { "0.20" } else { "0.15" };
+    let argv: Vec<String> = ["amfsplit", "regions", "-i"].iter().map(|s| s.to_string())
+        .chain([reads.display().to_string(), "-a".into(), anchors.display().to_string(), "-p".into(), panel.display().to_string(),
+                "-o".into(), prefix.display().to_string(), "--max-err-frac".into(), err.into(), "--only-anchored".into(), "--open-ends".into()])
+        .collect();
+    match Cli::try_parse_from(&argv)?.command {
+        Command::Regions(r) => regions(r, &argv)?,
+        _ => unreachable!(),
+    }
+    Ok(prefix)
+}
+
 fn name_cmd(a: NameArgs) -> Result<()> {
+    let windows = match (&a.windows, &a.reads) {
+        (Some(w), None) => w.clone(),
+        (None, Some(reads)) => reads_to_windows(&a, reads)?,
+        _ => anyhow::bail!("give --windows (the prefix `amfsplit regions` wrote) or --reads"),
+    };
     let r = amfsplit_naming::run_name(&amfsplit_naming::NameOptions {
-        windows: a.windows, db: a.db, out: a.out.clone(), fixture_dir: naming_data(),
+        windows, db: a.db, out: a.out.clone(), fixture_dir: naming_data(),
         blast_threads: a.blast_threads, epa_threads: a.epa_threads, blastn: a.blastn, mafft: a.mafft, epa_ng: a.epa_ng, compare_with: a.compare_with,
     })?;
     println!("{} sequences named, {} skipped (missing windows); {}", r.named, r.skipped, a.out.join("calls.tsv").display());

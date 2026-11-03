@@ -19,7 +19,7 @@ calls end to end. Release packaging is in progress.
 ## Quick start: naming long reads
 
 You need the tools at the versions the paper used: ITSxRust 0.3.0, BLAST+ 2.17.0, MAFFT 7.526 and
-EPA-ng 0.3.8. You also need three downloads:
+EPA-ng 0.3.8 (all on Bioconda; `packaging/bioconda/` holds the draft recipe for amfsplit itself). You also need three downloads:
 
 - MaarjAM, the gDAT snapshot of July 2020 (3,081 sequences);
 - the UNITE 10.0 general FASTA release of 19 February 2025 (`UNITE_public_19.02.2025.fasta.gz`);
@@ -31,12 +31,13 @@ EPA-ng 0.3.8. You also need three downloads:
 #    V18 reference alignment exactly as the frozen run did (MAFFT L-INS-i, checked by hash)
 amfsplit db -o amfsplit_db --maarjam maarjam.fasta --unite UNITE_public_19.02.2025.fasta.gz \
     --v18-full V18_LSUDB_052025.fasta
-# 2. Cut the regions: ITSxRust anchors (--anchors-tsv), then the Stage 1 options used for HiFi reads
-amfsplit regions -i reads.fq.gz -a reads.anchors.tsv -p panels/amf_legacy_windows.tsv \
-    -o out/sample --max-err-frac 0.15 --only-anchored --open-ends
-# 3. Name every sequence that has all four windows
-amfsplit name -w out/sample --db amfsplit_db -o named/sample
+# 2. Name: ITSxRust anchors, regions with the paper's Stage 1 options, then the naming
+amfsplit name -i reads.fq.gz --hmm F.hmm --db amfsplit_db -o named/sample      # --preset ont for ONT
 ```
+
+`--hmm` is ITSx's fungal profile (the paper's `F.hmm` has SHA-256 `a8c38c5c...`). With anchors from an
+earlier ITSxRust run, pass `-a reads.anchors.tsv` instead. To run the steps separately, `amfsplit
+regions` writes the windows and `amfsplit name -w <prefix>` names them.
 
 `named/sample` then holds:
 
