@@ -30,6 +30,12 @@
 //! whose VT is not matched when its nearest training culture by SSU flank is Rhizoglomus and within
 //! the within-genus SSU limit (R3a's definition, refitted per round). A motif without that evidence
 //! is flag M1 and changes nothing. Artifact and divergent calls (A1, D1, D2) come first.
+//!
+//! R3, the provisional-genus flag: G1, which never changes a call, on any call that gives a genus.
+//! R3a (distance) flags when the sequence lies beyond the within-genus limit from every training
+//! culture of the given genus on any marker (r3a) or on all markers (r3a_all, the sensitivity).
+//! R3b (placement) flags when the best LSU placement's pendant length exceeds R3B_CUT, the 99th
+//! percentile of that length among the 803 culture main-type sequences of the 37 LSU-removal rounds.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -43,8 +49,93 @@ pub const R2_COLUMNS: [&str; 4] = ["r2_inside", "r2_failing_markers", "r2_unchec
 pub const R1A_COLUMNS: [&str; 3] = ["r1a_unnamed_inside", "r1a_named_inside", "r1a_action"];
 pub const R1B_COLUMNS: [&str; 2] = ["r1b_blocking_units", "r1b_unnamed_holders"];
 pub const R5_COLUMNS: [&str; 3] = ["r5_motif", "r5_rhizoglomus_evidence", "r5_action"];
-/// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then R2.
-pub const RULES: [&str; 5] = ["r5", "r5s", "r1a", "r1b", "r2"];
+pub const R3_COLUMNS: [&str; 3] = ["r3_genus", "r3_evidence", "r3_flag"];
+/// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
+/// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
+pub const RULES: [&str; 8] = ["r5", "r5s", "r1a", "r1b", "r2", "r3a", "r3a_all", "r3b"];
+/// R3b's cut, by its definition (Protocol v3): the 99th percentile (exclusive) of the best LSU
+/// placement's pendant length among the 803 main-type query rows of the 37 species LSU-removal rounds
+/// (release 0.3.2, external_holdout_v2). A test re-derives it from the published rounds.
+pub const R3B_CUT: f64 = 0.074_880_850_445;
+const GENUS_MARKERS: [(&str, &str); 3] = [("ssu_flank", "SSU"), ("LSU_LROR-FLR2", "LSU"), ("full_its", "ITS")];
+
+/// R3a for one round: within-genus limits per marker, and each genus's training main-type sequences.
+pub(crate) struct GenusRule {
+    limits: BTreeMap<&'static str, Option<f64>>,
+    seqs: BTreeMap<(&'static str, String), Vec<String>>,
+}
+
+impl GenusRule {
+    pub(crate) fn fit(data: &FrozenData, training: &StringSet, memo: &mut DistanceMemo) -> Result<Self> {
+        let mut limits = BTreeMap::new();
+        for (m, _) in GENUS_MARKERS { limits.insert(m, within_genus_limit(data, training, m, memo)?); }
+        let mut seqs: BTreeMap<(&'static str, String), Vec<String>> = BTreeMap::new();
+        for (acc, c) in &data.copies {
+            if c.copy_class != "main" || !training.contains(&c.culture) { continue; }
+            let genus = data.cultures.get(&c.culture).map(|m| m.genus.clone()).unwrap_or_default();
+            if genus.is_empty() { continue; }
+            for (m, _) in GENUS_MARKERS {
+                if let Some(s) = data.fa.get(m).and_then(|f| f.get(acc)) { seqs.entry((m, genus.clone())).or_default().push(s.clone()); }
+            }
+        }
+        Ok(Self { limits, seqs })
+    }
+
+    /// The markers on which the sequence lies beyond the limit from every training culture of
+    /// `genera`, and how many could be checked (None when none could).
+    fn beyond(&self, genera: &[&str], query: &dyn Fn(&str) -> Option<String>, memo: &mut DistanceMemo) -> Result<Option<(Vec<&'static str>, usize)>> {
+        let (mut beyond, mut checked) = (Vec::new(), 0);
+        for (m, lab) in GENUS_MARKERS {
+            let (Some(w), Some(t)) = (query(m).filter(|w| !w.is_empty()), self.limits[m]) else { continue };
+            let mut best = f64::INFINITY;
+            for g in genera { for s in self.seqs.get(&(m, (*g).to_owned())).into_iter().flatten() { best = best.min(memo.d(&w, s)?); } }
+            if !best.is_finite() { continue; }
+            checked += 1;
+            if best > t { beyond.push(lab); }
+        }
+        Ok((checked > 0).then_some((beyond, checked)))
+    }
+}
+
+/// R3 on rows (a flag only): `variant` is r3a, r3a_all or r3b. Returns the number of calls flagged.
+pub(crate) fn apply_r3(variant: &str, genus_rule: Option<&GenusRule>, rows: &mut [Row], query: &dyn Fn(&str, &str) -> Option<String>, memo: &mut DistanceMemo) -> Result<usize> {
+    let mut flagged = 0;
+    for row in rows {
+        for c in R3_COLUMNS { row.insert(c.into(), String::new()); }
+        let genera_text = row_value(row, "call_genera")?.to_owned();
+        let genera: Vec<&str> = genera_text.split(';').filter(|g| !g.is_empty()).collect();
+        if genera.is_empty() { continue; }
+        row.insert("r3_genus".into(), genera_text.clone());
+        let acc = row_value(row, "accession")?.to_owned();
+        let (flag, evidence) = match variant {
+            "r3b" => {
+                let p = row_value(row, "lsu_best_pendant_length")?.to_owned();
+                match p.parse::<f64>() {
+                    Ok(v) => (v > R3B_CUT, format!("LSU pendant length {p} against {R3B_CUT}")),
+                    Err(_) => (false, "no LSU placement".into()),
+                }
+            }
+            _ => {
+                let rule = genus_rule.ok_or_else(|| anyhow!("R3a needs the round's genus rule"))?;
+                match rule.beyond(&genera, &|m| query(m, &acc), memo)? {
+                    None => (false, "no marker to check".into()),
+                    Some((beyond, checked)) => {
+                        let fire = if variant == "r3a_all" { beyond.len() == checked } else { !beyond.is_empty() };
+                        (fire, if beyond.is_empty() { format!("inside the genus limit on {checked} marker(s)") } else { format!("beyond the genus limit on {}", beyond.join(", ")) })
+                    }
+                }
+            }
+        };
+        row.insert("r3_evidence".into(), evidence.clone());
+        if !flag { continue; }
+        row.insert("r3_flag".into(), "G1".into());
+        let existing = row_value(row, "flags")?.to_owned();
+        let text = format!("G1 provisional genus {genera_text}: {evidence}");
+        row.insert("flags".into(), if existing.is_empty() { text } else { format!("{existing}; {text}") });
+        flagged += 1;
+    }
+    Ok(flagged)
+}
 const RHIZOGLOMUS: [&str; 2] = ["Rhizophagus", "Rhizoglomus"];
 
 /// YTYGGRGARTATG, exactly (IUPAC: Y = C or T, R = A or G).
@@ -459,6 +550,9 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
     if rules.contains(&"r5") && rules.contains(&"r5s") { bail!("r5 and r5s are variants of one rule; choose one"); }
     let motif_variant = if rules.contains(&"r5s") { Some(true) } else if rules.contains(&"r5") { Some(false) } else { None };
     let mut motifs: BTreeMap<String, MotifRule> = BTreeMap::new();
+    let r3: Vec<&str> = rules.iter().copied().filter(|r| r.starts_with("r3")).collect();
+    if r3.len() > 1 { bail!("r3a, r3a_all and r3b are separate arms; choose one"); }
+    let mut genus_rules: BTreeMap<String, GenusRule> = BTreeMap::new();
     let (mut n_rows, mut known_before, mut demoted, mut rounds, mut limits) = (0, 0, 0, BTreeSet::new(), BTreeSet::new());
     let mut results = Vec::new();
     for (table, out) in tables {
@@ -505,6 +599,14 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
                 demoted += blocks[&key].apply(&data, &mut part)?;
             }
             if rules.contains(&"r2") { demoted += rule.apply(&mut part, &query, &mut memo)?; }
+            if let Some(v) = r3.first() {
+                if *v != "r3b" && !genus_rules.contains_key(held) {
+                    let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                    let training: StringSet = all.difference(&held_set).cloned().collect();
+                    genus_rules.insert(held.clone(), GenusRule::fit(&data, &training, &mut memo)?);
+                }
+                demoted += apply_r3(v, genus_rules.get(held), &mut part, &query, &mut memo)?;
+            }
             for (i, r) in idx.iter().zip(part) { rows[*i] = r; }
         }
         let mut headers = t.headers.clone();
@@ -512,6 +614,7 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
         if rules.contains(&"r1a") { headers.extend(R1A_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if !r3.is_empty() { headers.extend(R3_COLUMNS.iter().map(|c| (*c).to_owned())); }
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();
         results.push(super::scoring::TableResult { table: table.clone(), frozen: frozen_rows, arm: rows });

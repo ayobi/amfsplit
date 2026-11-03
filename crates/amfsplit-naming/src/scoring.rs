@@ -7,6 +7,12 @@
 //!   Exact species: the same copies called exactly their own species.
 //! - `species`: species holdout. False known: a main-type copy of a named species called a known
 //!   species or group (803).
+//! - `genus`: the 15 genus LSU-removal rounds (whole genus withheld), for the R3 flags: wrong-genus
+//!   calls flagged, V18 removed and intact.
+//! - With an R3 arm, every design also reports its G1 flags: wrong-genus calls flagged and right-genus
+//!   calls falsely flagged (culture designs), and on EUKARYOME the protocol's three: absent genera
+//!   given a genus flagged, absent species with the right genus falsely flagged, known species kept
+//!   falsely flagged.
 //! - Both holdouts also report short-5.8S copies recognised: copies of the short-5.8S divergent class
 //!   called divergent (43), the paper's measure of recognising a paralog from its own sequence.
 //! - `rounds`: the M4 species rounds, first-outcome folds only (no development fold, own placement):
@@ -50,6 +56,35 @@ pub struct OutcomeScore {
 }
 
 struct Unit { cluster: String, frozen: bool, arm: bool }
+
+fn g1(r: &Row) -> bool { r.get("r3_flag").map(String::as_str) == Some("G1") }
+fn genera_of(r: &Row) -> Vec<&str> { col(r, "call_genera").split(';').filter(|g| !g.is_empty()).collect() }
+
+/// G1 flag outcomes on culture rows, where each row's true genus is its culture's.
+fn genus_flags(data: &FrozenData, design: &str, results: &[TableResult], kind: &dyn Fn(&TableResult) -> Option<String>) -> Result<Vec<OutcomeScore>> {
+    let mut by: BTreeMap<String, (Vec<Unit>, Vec<Unit>)> = BTreeMap::new();
+    for t in results {
+        let Some(k) = kind(t) else { continue };
+        let e = by.entry(k).or_default();
+        for (_, a) in pairs(t)? {
+            if col(a, "copy_class") != "main" { continue; }
+            let genera = genera_of(a);
+            if genera.is_empty() { continue; }
+            let c = col(a, "culture");
+            let truth = data.cultures.get(c).map(|m| m.genus.clone()).unwrap_or_default();
+            let cluster = data.species.get(c).cloned().unwrap_or_else(|| c.to_owned());
+            let u = Unit { cluster, frozen: false, arm: g1(a) };
+            if genera.contains(&truth.as_str()) { e.1.push(u) } else { e.0.push(u) }
+        }
+    }
+    let mut out = Vec::new();
+    for (k, (wrong, right)) in by {
+        let sep = if k.is_empty() { "" } else { ", " };
+        out.push(summarize(design, &format!("wrong-genus calls flagged{sep}{k}"), wrong));
+        out.push(summarize(design, &format!("right-genus calls falsely flagged{sep}{k}"), right));
+    }
+    Ok(out)
+}
 
 fn known(r: &Row) -> bool { r.get("status").is_some_and(|s| KNOWN.contains(&s.as_str())) }
 fn calls(r: &Row, sp: &str) -> bool { r.get("call_species").is_some_and(|c| c.split(';').any(|x| x == sp)) }
@@ -109,6 +144,8 @@ fn pairs(t: &TableResult) -> Result<impl Iterator<Item = (&Row, &Row)>> {
     Ok(t.frozen.iter().zip(&t.arm))
 }
 
+fn has_r3(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r3_flag"))) }
+
 /// Short-5.8S divergent copies called divergent, clustered by species (or culture, when unnamed).
 fn short_recognised(data: &FrozenData, results: &[TableResult]) -> Result<Vec<Unit>> {
     let mut units = Vec::new();
@@ -145,6 +182,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             out.push(summarize("culture holdout", "known species kept", kept));
             out.push(summarize("culture holdout", "exact species calls", ex));
             out.push(summarize("culture holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
+            if has_r3(results) { out.extend(genus_flags(data, "culture holdout", results, &|_| Some(String::new()))?); }
         }
         "species" => {
             let mut fk = Vec::new();
@@ -157,6 +195,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             }
             out.push(summarize("species holdout", "false known", fk));
             out.push(summarize("species holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
+            if has_r3(results) { out.extend(genus_flags(data, "species holdout", results, &|_| Some(String::new()))?); }
         }
         "rounds" => {
             let mut by_kind: BTreeMap<String, Vec<Unit>> = BTreeMap::new();
@@ -180,6 +219,25 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 }
             }
             for (kind, units) in by_kind { out.push(summarize("LSU-removal rounds", &kind, units)); }
+            if has_r3(results) {
+                let first_outcome = |t: &TableResult| -> Option<String> {
+                    let dir = t.table.parent()?; let key = dir.parent()?.file_name()?.to_string_lossy().into_owned();
+                    let metrics: Value = serde_json::from_str(&fs::read_to_string(dir.join("metrics.json")).ok()?).ok()?;
+                    if !key.starts_with("species_") || metrics.get("development_fold").and_then(Value::as_bool).unwrap_or(false) { return None; }
+                    let f = t.table.file_name()?.to_string_lossy().into_owned();
+                    Some(if f.starts_with("external_holdout") { "V18 removed".into() } else { "V18 intact".into() })
+                };
+                out.extend(genus_flags(data, "LSU-removal rounds", results, &first_outcome)?);
+            }
+        }
+        "genus" => {
+            let kind = |t: &TableResult| -> Option<String> {
+                let key = t.table.parent()?.parent()?.file_name()?.to_string_lossy().into_owned();
+                if !key.starts_with("genus_") { return None; }
+                let f = t.table.file_name()?.to_string_lossy().into_owned();
+                Some(if f.starts_with("external_holdout") { "V18 removed".into() } else { "V18 intact".into() })
+            };
+            out.extend(genus_flags(data, "genus rounds", results, &kind)?);
         }
         "longglodb" => {
             let (mut fk, mut kept) = (Vec::new(), Vec::new());
@@ -210,8 +268,27 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             }
             out.push(summarize("EUKARYOME", "false known (absent taxa)", fk));
             out.push(summarize("EUKARYOME", "known species kept", kept));
+            if has_r3(results) {
+                let (mut ag, mut sp, mut kn) = (Vec::new(), Vec::new(), Vec::new());
+                for t in results {
+                    for (_, a) in pairs(t)? {
+                        let p = &roles[col(a, "accession")];
+                        let (role, own, organism) = (col(p, "role"), col(p, "own_species_in_v4"), col(p, "organism"));
+                        let genera = genera_of(a);
+                        if genera.is_empty() { continue; }
+                        let u = Unit { cluster: organism.to_owned(), frozen: false, arm: g1(a) };
+                        let og = normalise_genus(organism.split_whitespace().next().unwrap_or(""));
+                        if role == "novel lineage, genus not in v4" { ag.push(u); }
+                        else if role == "novel species, genus in v4" && genera.contains(&og.as_str()) { sp.push(u); }
+                        else if !own.is_empty() && known(a) && calls(a, own) { kn.push(u); }
+                    }
+                }
+                out.push(summarize("EUKARYOME", "absent genera given a genus: flagged", ag));
+                out.push(summarize("EUKARYOME", "absent species, right genus: falsely flagged", sp));
+                out.push(summarize("EUKARYOME", "known species kept: falsely flagged", kn));
+            }
         }
-        _ => bail!("unknown scoring design {design} (culture, species, rounds, longglodb, eukaryome)"),
+        _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome)"),
     }
     Ok(out)
 }

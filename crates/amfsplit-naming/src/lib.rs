@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1525,6 +1525,61 @@ mod tests {
             let (rh, other): (Vec<&Row>, Vec<&Row>) = carriers.iter().partition(|r| rhizo(r));
             assert_eq!((rh.len(), rh.iter().filter(|r| r["status"] == "divergent class").count()), (95, recall), "{rule}");
             assert_eq!((other.len(), other.iter().filter(|r| r["r5_action"] == "D4").count()), (438, 1), "{rule}");
+        }
+    }
+
+    #[test]
+    fn r3_flags_on_the_v4_holdouts() {
+        // first computed 3 November 2026 by the arm code; Protocol v3, section 7
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let tables = [(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"), (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")];
+        for (rule, species_false) in [("r3a", 19), ("r3a_all", 0), ("r3b", 0)] {
+            let (got, rows) = rule_scores(&[rule], &tables, &BTreeMap::new());
+            assert_eq!(got["culture holdout: right-genus calls falsely flagged"], (828, 0, 0), "{rule}");
+            assert_eq!(got["species holdout: right-genus calls falsely flagged"], (487, 0, species_false), "{rule}");
+            if rule == "r3a" {
+                // every one is Septoglomus viscosum, beyond the genus limit on SSU
+                assert!(rows.iter().filter(|r| r["r3_flag"] == "G1" && r["copy_class"] == "main").all(|r| r["culture"].starts_with("Septoglomus viscosum") && r["r3_evidence"].ends_with("SSU")));
+            }
+        }
+    }
+
+    #[test]
+    fn r3_development_estimates() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R3 estimates: set AMFSPLIT_BENCHMARK and AMFSPLIT_EUK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let (mut species, mut genus) = (Vec::new(), Vec::new());
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            let name = d.file_name().unwrap().to_string_lossy().into_owned();
+            let bucket = if name.starts_with("species_") { &mut species } else if name.starts_with("genus_") { &mut genus } else { continue };
+            for k in ["external_holdout_v2", "full_reference_v2"] { bucket.push(d.join(format!("06_evaluation_v2/{k}.copies.tsv"))); }
+        }
+        // R3b's cut, re-derived from its definition
+        let mut pendants = Vec::new();
+        for p in species.iter().filter(|p| p.to_string_lossy().contains("external_holdout_v2")) {
+            for r in read_table(p).unwrap().rows { if r["copy_class"] == "main" && !r["lsu_best_pendant_length"].is_empty() { pendants.push(r["lsu_best_pendant_length"].parse::<f64>().unwrap()); } }
+        }
+        assert_eq!(pendants.len(), 803);
+        assert_eq!(quantiles_exclusive(&pendants, 100)[98], rules::R3B_CUT);
+        let table = m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz");
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let sp: Vec<_> = species.iter().map(|p| (p.clone(), "rounds")).collect();
+        let gn: Vec<_> = genus.iter().map(|p| (p.clone(), "genus")).collect();
+        for (rule, eu, eu_sp, gr, rr_intact, rr_removed) in [("r3a", 628, 6, 69, 19, 19), ("r3a_all", 17, 0, 2, 0, 0), ("r3b", 199, 0, 40, 0, 1)] {
+            let (got, _) = rule_scores(&[rule], &[(table.clone(), "eukaryome")], &ew);
+            assert_eq!(got["EUKARYOME: absent genera given a genus: flagged"], (1063, 0, eu), "{rule}");
+            assert_eq!(got["EUKARYOME: absent species, right genus: falsely flagged"], (47, 0, eu_sp), "{rule}");
+            assert_eq!(got["EUKARYOME: known species kept: falsely flagged"], (152, 0, 0), "{rule}");
+            let (got, _) = rule_scores(&[rule], &gn, &BTreeMap::new());
+            assert_eq!(got["genus rounds: wrong-genus calls flagged, V18 removed"], (69, 0, gr), "{rule}");
+            let (got, _) = rule_scores(&[rule], &sp, &BTreeMap::new());
+            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 intact"], (328, 0, rr_intact), "{rule}");
+            assert_eq!(got["LSU-removal rounds: right-genus calls falsely flagged, V18 removed"], (346, 0, rr_removed), "{rule}");
         }
     }
 

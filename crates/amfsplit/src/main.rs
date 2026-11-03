@@ -62,7 +62,7 @@ enum Command {
 struct ArmArgs {
     /// The rules to apply, comma-separated, run in protocol order: r5 or r5s (the Rhizoglomus motif
     /// step, by VT or with the SSU fallback), r1a or r1b (unnamed cultures as taxa: inside or block),
-    /// r2 (the inside gate)
+    /// r2 (the inside gate), then one R3 flag arm: r3a, r3a_all (all markers) or r3b (placement)
     #[arg(long, value_delimiter = ',', required = true)]
     rule: Vec<String>,
     /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's
@@ -78,8 +78,8 @@ struct ArmArgs {
     /// Output folder (several --table): each written as <its round folder>__<its file name>
     #[arg(long)]
     out_dir: Option<PathBuf>,
-    /// Score frozen against arm under a design: culture, species, rounds, longglodb or eukaryome
-    #[arg(long, value_parser = ["culture", "species", "rounds", "longglodb", "eukaryome"])]
+    /// Score frozen against arm under a design: culture, species, rounds, genus, longglodb or eukaryome
+    #[arg(long, value_parser = ["culture", "species", "rounds", "genus", "longglodb", "eukaryome"])]
     score: Option<String>,
     /// The EUKARYOME test's locked roles (benchmarks/eukaryome/predictions.predictions.tsv), for --score eukaryome
     #[arg(long)]
@@ -113,7 +113,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
         println!("scores written to {}", path.display());
     }
-    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed (R5 D4, R1a U1, R1b U2, R2 N7; {} known calls before)",
+    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed or flagged (R5 D4, R1a U1, R1b U2, R2 N7, R3 G1; {} known calls before)",
              rules.join("+"), r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())
