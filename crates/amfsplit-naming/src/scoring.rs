@@ -7,6 +7,8 @@
 //!   Exact species: the same copies called exactly their own species.
 //! - `species`: species holdout. False known: a main-type copy of a named species called a known
 //!   species or group (803).
+//! - Both holdouts also report short-5.8S copies recognised: copies of the short-5.8S divergent class
+//!   called divergent (43), the paper's measure of recognising a paralog from its own sequence.
 //! - `rounds`: the M4 species rounds, first-outcome folds only (no development fold, own placement):
 //!   false known among main-type query rows, V18 removed and V18 intact (673 each).
 //! - `longglodb`: named test cultures; false known among those whose species v4 lacks (102), kept
@@ -107,6 +109,20 @@ fn pairs(t: &TableResult) -> Result<impl Iterator<Item = (&Row, &Row)>> {
     Ok(t.frozen.iter().zip(&t.arm))
 }
 
+/// Short-5.8S divergent copies called divergent, clustered by species (or culture, when unnamed).
+fn short_recognised(data: &FrozenData, results: &[TableResult]) -> Result<Vec<Unit>> {
+    let mut units = Vec::new();
+    for t in results {
+        for (f, a) in pairs(t)? {
+            if col(f, "copy_class") != "divergent" || col(f, "div_kind") != "short_5.8S" { continue; }
+            let c = col(f, "culture");
+            let cluster = data.species.get(c).cloned().unwrap_or_else(|| c.to_owned());
+            units.push(Unit { cluster, frozen: col(f, "status") == "divergent class", arm: col(a, "status") == "divergent class" });
+        }
+    }
+    Ok(units)
+}
+
 /// Score an arm's tables under one design. `euk_predictions` is the EUKARYOME test's locked
 /// `predictions.predictions.tsv` (design `eukaryome` only).
 pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predictions: Option<&Path>) -> Result<Vec<OutcomeScore>> {
@@ -128,6 +144,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
             }
             out.push(summarize("culture holdout", "known species kept", kept));
             out.push(summarize("culture holdout", "exact species calls", ex));
+            out.push(summarize("culture holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
         }
         "species" => {
             let mut fk = Vec::new();
@@ -139,6 +156,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 }
             }
             out.push(summarize("species holdout", "false known", fk));
+            out.push(summarize("species holdout", "short-5.8S copies recognised", short_recognised(data, results)?));
         }
         "rounds" => {
             let mut by_kind: BTreeMap<String, Vec<Unit>> = BTreeMap::new();

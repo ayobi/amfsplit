@@ -60,8 +60,9 @@ enum Command {
 
 #[derive(Args)]
 struct ArmArgs {
-    /// The rules to apply, comma-separated, run in protocol order: r1a (unnamed cultures as taxa,
-    /// inside), r1b (unnamed cultures as taxa, block), r2 (the inside gate)
+    /// The rules to apply, comma-separated, run in protocol order: r5 or r5s (the Rhizoglomus motif
+    /// step, by VT or with the SSU fallback), r1a or r1b (unnamed cultures as taxa: inside or block),
+    /// r2 (the inside gate)
     #[arg(long, value_delimiter = ',', required = true)]
     rule: Vec<String>,
     /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's
@@ -112,7 +113,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
         println!("scores written to {}", path.display());
     }
-    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed (R1a U1, R1b U2, R2 N7; {} known calls before)",
+    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed (R5 D4, R1a U1, R1b U2, R2 N7; {} known calls before)",
              rules.join("+"), r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())

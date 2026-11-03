@@ -22,6 +22,14 @@
 //! ("novel species, genus known"), with code U2 and flag U naming the cultures. The holders are the
 //! naming code's own fits per round: the VT and SH trainers, and the LSU placement fit on the
 //! species-clade units of the round's placements.
+//!
+//! R5, the Rhizoglomus motif step: a new decision step D4, after D1 and D2 and before B1. A sequence
+//! whose 5.8S (the ITSxRust window) contains YTYGGRGARTATG exactly becomes a divergent sequence,
+//! named by its VT alone, when every matched VT unit is linked only to Rhizoglomus training cultures
+//! (v4 labels Rhizophagus and Rhizoglomus). The SSU-fallback variant (r5s) also accepts a sequence
+//! whose VT is not matched when its nearest training culture by SSU flank is Rhizoglomus and within
+//! the within-genus SSU limit (R3a's definition, refitted per round). A motif without that evidence
+//! is flag M1 and changes nothing. Artifact and divergent calls (A1, D1, D2) come first.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -34,7 +42,115 @@ pub const INSIDE_MARKERS: [(&str, &str); 3] = [("full_its", "ITS"), ("LSU_LROR-F
 pub const R2_COLUMNS: [&str; 4] = ["r2_inside", "r2_failing_markers", "r2_unchecked_markers", "r2_limits_pct"];
 pub const R1A_COLUMNS: [&str; 3] = ["r1a_unnamed_inside", "r1a_named_inside", "r1a_action"];
 pub const R1B_COLUMNS: [&str; 2] = ["r1b_blocking_units", "r1b_unnamed_holders"];
-pub const RULES: [&str; 3] = ["r1a", "r1b", "r2"];
+pub const R5_COLUMNS: [&str; 3] = ["r5_motif", "r5_rhizoglomus_evidence", "r5_action"];
+/// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then R2.
+pub const RULES: [&str; 5] = ["r5", "r5s", "r1a", "r1b", "r2"];
+const RHIZOGLOMUS: [&str; 2] = ["Rhizophagus", "Rhizoglomus"];
+
+/// YTYGGRGARTATG, exactly (IUPAC: Y = C or T, R = A or G).
+pub(crate) fn has_rhizoglomus_motif(s58: &str) -> bool {
+    const M: &[u8] = b"YTYGGRGARTATG";
+    let ok = |p: u8, b: u8| match p { b'Y' => b == b'C' || b == b'T', b'R' => b == b'A' || b == b'G', _ => p == b };
+    let b: Vec<u8> = s58.bytes().map(|c| c.to_ascii_uppercase()).collect();
+    b.windows(M.len()).any(|w| w.iter().zip(M).all(|(x, p)| ok(*p, *x)))
+}
+
+/// R3a's within-genus limit per marker: the 99th percentile (exclusive) of the distance from each
+/// main-type sequence of a named training species to the nearest main-type sequence of another named
+/// training species of its genus, over genera with two or more named training species.
+pub(crate) fn within_genus_limit(data: &FrozenData, training: &StringSet, marker: &str, memo: &mut DistanceMemo) -> Result<Option<f64>> {
+    let mut by_genus: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (acc, c) in &data.copies {
+        if c.copy_class != "main" || !training.contains(&c.culture) { continue; }
+        let (Some(sp), Some(seq)) = (data.species.get(&c.culture), data.fa.get(marker).and_then(|f| f.get(acc))) else { continue };
+        let genus = data.cultures.get(&c.culture).map(|m| m.genus.clone()).unwrap_or_default();
+        by_genus.entry(genus).or_default().push((seq.clone(), sp.clone()));
+    }
+    let mut vals = Vec::new();
+    for items in by_genus.values() {
+        if items.iter().map(|(_, sp)| sp).collect::<BTreeSet<_>>().len() < 2 { continue; }
+        for (s1, sp1) in items {
+            let mut best = f64::INFINITY;
+            for (s2, sp2) in items { if sp2 != sp1 { best = best.min(memo.d(s1, s2)?); } }
+            vals.push(best);
+        }
+    }
+    Ok((vals.len() >= 2).then(|| quantiles_exclusive(&vals, 100)[98]))
+}
+
+/// R5 for one round: the SSU-fallback limit and the training main-type SSU sequences.
+pub(crate) struct MotifRule {
+    fallback: bool,
+    ssu_limit: Option<f64>,
+    ssu_refs: Vec<(String, String)>,
+}
+
+impl MotifRule {
+    pub(crate) fn fit(data: &FrozenData, training: &StringSet, fallback: bool, memo: &mut DistanceMemo) -> Result<Self> {
+        let ssu_limit = if fallback { within_genus_limit(data, training, "ssu_flank", memo)? } else { None };
+        let ssu_refs = data.copies.iter().filter(|(_, c)| c.copy_class == "main" && training.contains(&c.culture))
+            .filter_map(|(acc, c)| data.fa.get("ssu_flank").and_then(|f| f.get(acc)).map(|s| (s.clone(), c.culture.clone()))).collect();
+        Ok(Self { fallback, ssu_limit, ssu_refs })
+    }
+
+    /// Returns the number of calls turned divergent (D4).
+    pub(crate) fn apply(&self, data: &FrozenData, rows: &mut [Row], query: &dyn Fn(&str, &str) -> Option<String>, memo: &mut DistanceMemo) -> Result<usize> {
+        let mut turned = 0;
+        let genus = |c: &str| data.cultures.get(c).map(|m| m.genus.clone()).unwrap_or_default();
+        for row in rows {
+            for c in R5_COLUMNS { row.insert(c.into(), String::new()); }
+            let acc = row_value(row, "accession")?.to_owned();
+            let Some(s58) = query("s58", &acc) else { continue };
+            if !has_rhizoglomus_motif(&s58) { row.insert("r5_motif".into(), "0".into()); continue; }
+            row.insert("r5_motif".into(), "1".into());
+            let status = row_value(row, "status")?.to_owned();
+            let vt_genera: BTreeSet<String> = row_value(row, "VT_genera")?.split(';').filter(|g| !g.is_empty()).map(str::to_owned).collect();
+            let vt_matched = row_value(row, "VT_state")? == "matched";
+            let mut evidence: Option<(String, String)> = None;   // (kind, placement)
+            if vt_matched && !vt_genera.is_empty() && vt_genera.iter().all(|g| RHIZOGLOMUS.contains(&g.as_str())) {
+                evidence = Some(("VT".into(), row_value(row, "VT_species")?.to_owned()));
+            } else if self.fallback && !vt_matched {
+                if let (Some(w), Some(limit)) = (query("ssu_flank", &acc).filter(|w| !w.is_empty()), self.ssu_limit) {
+                    let mut best = f64::INFINITY;
+                    let mut nearest: BTreeSet<String> = BTreeSet::new();
+                    for (s, c) in &self.ssu_refs {
+                        let d = memo.d(&w, s)?;
+                        if d < best { best = d; nearest.clear(); }
+                        if d == best { nearest.insert(c.clone()); }
+                    }
+                    if !nearest.is_empty() && best <= limit && nearest.iter().all(|c| RHIZOGLOMUS.contains(&genus(c).as_str())) {
+                        let genera: BTreeSet<String> = nearest.iter().map(|c| genus(c)).collect();
+                        evidence = Some((format!("SSU fallback: nearest culture at {best:.2}%, within the within-genus SSU limit {limit:.3}%"),
+                                         genera.into_iter().collect::<Vec<_>>().join(";")));
+                    }
+                }
+            }
+            let add = |row: &mut Row, col: &str, text: String| -> Result<()> {
+                let existing = row_value(row, col)?.to_owned();
+                row.insert(col.into(), if existing.is_empty() { text } else { format!("{existing}; {text}") });
+                Ok(())
+            };
+            match evidence {
+                Some((kind, placement)) if status != "artifact" && status != "divergent class" => {
+                    row.insert("status".into(), "divergent class".into());
+                    row.insert("placement".into(), placement.clone());
+                    row.insert("novelty_claim".into(), "not_asserted".into());
+                    add(row, "reasons", format!("D4 5.8S carries the Rhizoglomus motif YTYGGRGARTATG; Rhizoglomus by {kind}; placed by {}: {placement}",
+                                                if kind == "VT" { "VT" } else { "genus" }))?;
+                    row.insert("r5_rhizoglomus_evidence".into(), kind);
+                    row.insert("r5_action".into(), "D4".into());
+                    turned += 1;
+                }
+                Some((kind, _)) => { row.insert("r5_rhizoglomus_evidence".into(), kind); }
+                None => {
+                    add(row, "flags", "M1 5.8S carries the Rhizoglomus motif without SSU evidence for Rhizoglomus".into())?;
+                    row.insert("r5_action".into(), "M1".into());
+                }
+            }
+        }
+        Ok(turned)
+    }
+}
 
 /// R1b's unit holders for one round: arm -> unit -> training cultures holding it.
 pub(crate) struct BlockRule {
@@ -340,6 +456,9 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
     let frozen_placements = fixture_dir.join("placement/lsu_placements.copies.tsv");
     let mut psets_by: BTreeMap<std::path::PathBuf, BTreeMap<String, StringSet>> = BTreeMap::new();
     let mut blocks: BTreeMap<(String, std::path::PathBuf), BlockRule> = BTreeMap::new();
+    if rules.contains(&"r5") && rules.contains(&"r5s") { bail!("r5 and r5s are variants of one rule; choose one"); }
+    let motif_variant = if rules.contains(&"r5s") { Some(true) } else if rules.contains(&"r5") { Some(false) } else { None };
+    let mut motifs: BTreeMap<String, MotifRule> = BTreeMap::new();
     let (mut n_rows, mut known_before, mut demoted, mut rounds, mut limits) = (0, 0, 0, BTreeSet::new(), BTreeSet::new());
     let mut results = Vec::new();
     for (table, out) in tables {
@@ -367,6 +486,14 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
             limits.insert(rule.limits_text());
             rounds.insert(held.clone());
             let mut part: Vec<Row> = idx.iter().map(|i| rows[*i].clone()).collect();
+            if let Some(fallback) = motif_variant {
+                if !motifs.contains_key(held) {
+                    let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                    let training: StringSet = all.difference(&held_set).cloned().collect();
+                    motifs.insert(held.clone(), MotifRule::fit(&data, &training, fallback, &mut memo)?);
+                }
+                demoted += motifs[held].apply(&data, &mut part, &query, &mut memo)?;
+            }
             if rules.contains(&"r1a") { demoted += rule.apply_r1a(&data, &mut part, &query, &mut memo)?; }
             if rules.contains(&"r1b") {
                 let key = (held.clone(), placements_path.clone());
@@ -381,6 +508,7 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
             for (i, r) in idx.iter().zip(part) { rows[*i] = r; }
         }
         let mut headers = t.headers.clone();
+        if motif_variant.is_some() { headers.extend(R5_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1a") { headers.extend(R1A_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
@@ -395,7 +523,11 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
 /// (`<prefix>.full_its.fasta`, `<prefix>.LSU_LROR-FLR2.fasta`, `<prefix>.ssu_flank.fasta`).
 pub fn read_windows(prefix: &Path) -> Result<BTreeMap<String, SeqMap>> {
     let name = prefix.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    INSIDE_MARKERS.iter().map(|(m, _)| Ok(((*m).to_owned(), read_fasta(&prefix.with_file_name(format!("{name}.{m}.fasta")))?))).collect()
+    let mut out: BTreeMap<String, SeqMap> = INSIDE_MARKERS.iter()
+        .map(|(m, _)| Ok(((*m).to_owned(), read_fasta(&prefix.with_file_name(format!("{name}.{m}.fasta")))?))).collect::<Result<_>>()?;
+    let s58 = prefix.with_file_name(format!("{name}.s58.fasta"));
+    if s58.is_file() { out.insert("s58".into(), read_fasta(&s58)?); }
+    Ok(out)
 }
 
 /// Score an arm's tables under one design (see `scoring`), against the culture reference.

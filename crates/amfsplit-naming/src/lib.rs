@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1489,6 +1489,43 @@ mod tests {
         let (got, _) = rule_scores(&["r1b"], &rounds, &BTreeMap::new());
         assert_eq!(got["LSU-removal rounds: false known, V18 removed"], (673, 53, 53));
         assert_eq!(got["LSU-removal rounds: false known, V18 intact"], (673, 9, 9));
+    }
+
+    #[test]
+    fn r5_recognises_short_copies_in_the_v4_holdouts() {
+        // first computed 3 November 2026 by the arm code; Protocol v3, section 7
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let tables = [(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"), (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")];
+        for (rule, culture, species) in [("r5", 36, 32), ("r5s", 40, 40)] {
+            let (got, rows) = rule_scores(&[rule], &tables, &BTreeMap::new());
+            assert_eq!(got["culture holdout: short-5.8S copies recognised"], (43, 36, culture), "{rule}");
+            assert_eq!(got["species holdout: short-5.8S copies recognised"], (43, 29, species), "{rule}");
+            assert_eq!(got["culture holdout: known species kept"], (755, 745, 745), "{rule}");
+            assert_eq!(got["species holdout: false known"], (803, 18, 18), "{rule}");
+            // R5 turns only divergent copies divergent on culture data
+            assert!(rows.iter().filter(|r| r["r5_action"] == "D4").all(|r| r["copy_class"] == "divergent"), "{rule}");
+        }
+    }
+
+    #[test]
+    fn r5_reproduces_its_eukaryome_development_estimates() {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R5 EUKARYOME estimates: set AMFSPLIT_BENCHMARK and AMFSPLIT_EUK");
+            return;
+        };
+        let table = Path::new(&bench).join("benchmarks/m4_external_holdout/runs_euk/06_scores/A_primary_v2.copies.tsv.gz");
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        for (rule, recall) in [("r5", 66), ("r5s", 93)] {
+            let (got, rows) = rule_scores(&[rule], &[(table.clone(), "eukaryome")], &ew);
+            assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 13));
+            assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 152));
+            let carriers: Vec<&Row> = rows.iter().filter(|r| r["r5_motif"] == "1").collect();
+            let rhizo = |r: &Row| r["organism"].starts_with("Rhizoglomus") || r["organism"].starts_with("Rhizophagus");
+            let (rh, other): (Vec<&Row>, Vec<&Row>) = carriers.iter().partition(|r| rhizo(r));
+            assert_eq!((rh.len(), rh.iter().filter(|r| r["status"] == "divergent class").count()), (95, recall), "{rule}");
+            assert_eq!((other.len(), other.iter().filter(|r| r["r5_action"] == "D4").count()), (438, 1), "{rule}");
+        }
     }
 
     #[test]
