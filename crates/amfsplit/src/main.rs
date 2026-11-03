@@ -54,6 +54,47 @@ enum Command {
     /// Name query sequences with the paper's method (species clades plus N6), from the four windows
     /// `amfsplit regions` writes
     Name(NameArgs),
+    /// Apply an opt-in Protocol v3 rule to a named-row table (development estimates, dress rehearsal)
+    Arm(ArmArgs),
+}
+
+#[derive(Args)]
+struct ArmArgs {
+    /// The rule to apply (so far: r2, the inside gate)
+    #[arg(long, value_parser = ["r2"])]
+    rule: String,
+    /// Named-row table (.tsv or .tsv.gz) with held_cultures, e.g. a v2 golden or a published run's table
+    #[arg(long)]
+    table: PathBuf,
+    /// Windows prefix for sequences outside the culture reference (<prefix>.full_its.fasta etc.)
+    #[arg(short = 'w', long)]
+    windows: Option<PathBuf>,
+    #[arg(short = 'o', long)]
+    out: PathBuf,
+}
+
+fn arm_cmd(a: ArmArgs) -> Result<()> {
+    let mut extra = std::collections::BTreeMap::new();
+    if let Some(prefix) = &a.windows {
+        let name = prefix.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        for (m, _) in amfsplit_naming::INSIDE_MARKERS {
+            let p = prefix.with_file_name(format!("{name}.{m}.fasta"));
+            let mut seqs = std::collections::BTreeMap::new();
+            let (mut id, mut s) = (None::<String>, String::new());
+            for line in std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?.lines() {
+                if let Some(h) = line.strip_prefix('>') {
+                    if let Some(i) = id.take() { seqs.insert(i, std::mem::take(&mut s)); }
+                    id = h.split_whitespace().next().map(str::to_owned);
+                } else { s.push_str(&line.trim().to_ascii_uppercase()); }
+            }
+            if let Some(i) = id { seqs.insert(i, s); }
+            extra.insert(m.to_owned(), seqs);
+        }
+    }
+    let r = amfsplit_naming::run_r2_on_table(&naming_data(), &a.table, &extra, &a.out)?;
+    println!("R2 on {} rows in {} rounds: {} of {} known calls demoted to N7; written to {}", r.rows, r.rounds, r.demoted, r.known_before, a.out.display());
+    if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
+    Ok(())
 }
 
 #[derive(Args)]
@@ -789,6 +830,7 @@ fn main() -> std::process::ExitCode {
         Command::Gate3(a) => gate3_cmd(a),
         Command::Db(a) => db_cmd(a),
         Command::Name(a) => name_cmd(a),
+        Command::Arm(a) => arm_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
