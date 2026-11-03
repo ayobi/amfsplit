@@ -46,6 +46,14 @@
 //! R8, novelty on one marker: a new lineage resting on one unmatched arm, with the other two arms no
 //! call, keeps its call and carries flag N8 (r8). The variant R8d (r8d) demotes it to "insufficient
 //! evidence", neither known nor new. It runs after R7 and before the R3 flag.
+//!
+//! R4, limits on two collections (N6 part): N6's threshold is refitted per round on the round's v4
+//! training cultures plus the LongGloDB v1 cultures of other laboratories (the name-check exclusions
+//! left out, copy classes by v4's 5.8S rule), with nearest other-culture distances crossing
+//! collections, at the chosen percentile. Queries are still compared with v4: R4 moves the threshold,
+//! not the comparison, so a known call fires when its nearest training-culture ITS distance (recomputed
+//! exactly, and checked against the recorded one) exceeds the refitted threshold. `fit` "v4" or
+//! "longglodb" gives the cross-fitted development estimates; "pooled" is the rule.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -62,9 +70,155 @@ pub const R5_COLUMNS: [&str; 3] = ["r5_motif", "r5_rhizoglomus_evidence", "r5_ac
 pub const R3_COLUMNS: [&str; 3] = ["r3_genus", "r3_evidence", "r3_flag"];
 pub const R7_COLUMNS: [&str; 2] = ["r7_genus_clade_unit", "r7_action"];
 pub const R8_COLUMNS: [&str; 1] = ["r8_action"];
+pub const R4_COLUMNS: [&str; 2] = ["r4_threshold_pct", "r4_action"];
+
+/// The LongGloDB side of R4's pool, prepared once: each kept culture's main-type ITS sequences.
+pub struct R4Inputs {
+    pub fit: String,
+    pub percentile: f64,
+    /// (accession, culture, species, full ITS) of the main-type ASVs of named LongGloDB cultures
+    lgdb: Vec<(String, String, String, String)>,
+}
+
+/// N6's pair distance: computed once per pair, from the copy whose accession sorts first (n6_its.rs).
+fn n6_pair(memo: &mut DistanceMemo, a: &str, sa: &str, b: &str, sb: &str) -> Result<f64> {
+    if a <= b { memo.d(sa, sb) } else { memo.d(sb, sa) }
+}
+
+impl R4Inputs {
+    /// The frozen N6 refit (fit on v4 at `percentile`), without LongGloDB: for checks and tests.
+    pub fn v4_only(percentile: f64) -> Self { Self { fit: "v4".into(), percentile, lgdb: Vec::new() } }
+}
+
+impl R4Inputs {
+    /// `windows`: LongGloDB windows (full_its, s58 and the inside markers); `table`: rows with
+    /// accession, culture and organism for those ASVs; `checks`: r4_name_checks.tsv, verified here.
+    pub fn prepare(fixture_dir: &Path, fit: &str, percentile: f64, windows: &BTreeMap<String, SeqMap>, table: &Path, checks: &Path) -> Result<Self> {
+        if !["pooled", "v4", "longglodb"].contains(&fit) { bail!("--r4-fit must be pooled, v4 or longglodb"); }
+        let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
+        let rows = read_table_any(table)?.rows;
+        let mut by_culture: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+        for r in &rows { by_culture.entry(row_value(r, "culture")?.to_owned()).or_insert_with(|| (r["organism"].clone(), Vec::new())).1.push(row_value(r, "accession")?.to_owned()); }
+        let fasta = |m: &str| windows.get(m).ok_or_else(|| anyhow!("R4 needs the LongGloDB {m} window"));
+        let (its, s58) = (fasta("full_its")?, fasta("s58")?);
+        // the name checks, verified before any limit is fitted
+        let all: StringSet = data.cultures.keys().cloned().collect();
+        let mut memo = DistanceMemo::default();
+        let inside = InsideRule::fit(&data, &all, &mut memo)?;
+        let mut excluded = StringSet::new();
+        for c in read_table(checks)?.rows {
+            let culture = row_value(&c, "culture")?.to_owned();
+            for part in row_value(&c, "check")?.split(';').map(str::trim) {
+                let (k, v) = part.split_once('=').unwrap_or((part, ""));
+                let asvs = by_culture.get(&culture).map(|(_, a)| a.clone()).unwrap_or_default();
+                let inside_of = |a: &str, sp: &str, memo: &mut DistanceMemo| -> Result<bool> {
+                    let w: Vec<(&'static str, Option<String>)> = INSIDE_MARKERS.iter().map(|(m, _)| (*m, windows.get(*m).and_then(|f| f.get(a)).cloned())).collect();
+                    let seqs = |m: &'static str| inside.items.get(&(m, sp.to_owned())).map(|s| s.iter().map(|(q, _)| q.clone()).collect()).unwrap_or_default();
+                    inside.inside_all(&w, &seqs, memo)
+                };
+                match k {
+                    "asvs" => if asvs.len() != v.parse::<usize>()? { bail!("name check failed: {culture} has {} ASVs, not {v}", asvs.len()); },
+                    "inside_all" => for a in &asvs { if !inside_of(a, v, &mut memo)? { bail!("name check failed: {a} of {culture} is not inside {v}"); } },
+                    "inside_none" => for sp in v.split(',') { for a in &asvs { if inside_of(a, sp, &mut memo)? { bail!("name check failed: {a} of {culture} is inside {sp}"); } } },
+                    "code_match" => {} // recorded in LongGloDB's overlap.cultures.tsv (stefani_code_match)
+                    _ => bail!("unknown name check {k}"),
+                }
+            }
+            excluded.insert(culture);
+        }
+        // v4's 5.8S rule: a copy more than 3% from its culture's 5.8S medoid is divergent
+        let mut lgdb = Vec::new();
+        for (culture, (organism, asvs)) in &by_culture {
+            if excluded.contains(culture) || !is_named(organism) { continue; }
+            let d = |a: &str, b: &str, memo: &mut DistanceMemo| -> Result<f64> { if a == b { Ok(0.0) } else { memo.d(&s58[a], &s58[b]) } };
+            let mut best = (f64::INFINITY, String::new());
+            for a in asvs {
+                let mut sum = 0.0;
+                for b in asvs { sum += d(a, b, &mut memo)?; }
+                if sum < best.0 { best = (sum, a.clone()); }
+            }
+            for a in asvs {
+                if d(a, &best.1, &mut memo)? <= 3.0 { if let Some(q) = its.get(a) { lgdb.push((a.clone(), culture.clone(), organism.clone(), q.clone())); } }
+            }
+        }
+        Ok(Self { fit: fit.into(), percentile, lgdb })
+    }
+
+    /// The round's refitted N6 threshold.
+    fn threshold(&self, data: &FrozenData, training: &StringSet, memo: &mut DistanceMemo) -> Result<f64> {
+        let mut by: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
+        if self.fit != "longglodb" {
+            for (acc, c) in &data.copies {
+                if c.copy_class != "main" || !training.contains(&c.culture) { continue; }
+                let (Some(sp), Some(q)) = (data.species.get(&c.culture), data.fa.get("full_its").and_then(|f| f.get(acc))) else { continue };
+                by.entry(sp.clone()).or_default().push((acc.clone(), c.culture.clone(), q.clone()));
+            }
+        }
+        if self.fit != "v4" { for (a, c, sp, q) in &self.lgdb { by.entry(sp.clone()).or_default().push((a.clone(), c.clone(), q.clone())); } }
+        let mut vals = Vec::new();
+        for items in by.values() {
+            if items.iter().map(|(_, c, _)| c).collect::<BTreeSet<_>>().len() < 2 { continue; }
+            for (a1, c1, s1) in items {
+                let mut best = f64::INFINITY;
+                for (a2, c2, s2) in items { if c2 != c1 { best = best.min(n6_pair(memo, a1, s1, a2, s2)?); } }
+                vals.push(best);
+            }
+        }
+        let k = (self.percentile * 10.0).round() as usize;
+        Ok(quantiles_exclusive(&vals, 1000)[k - 1])
+    }
+}
+
+/// R4 (N6 part) on rows; returns the number of calls demoted or restored.
+fn apply_r4(data: &FrozenData, training: &StringSet, t: f64, rows: &mut [Row], query: &dyn Fn(&str, &str) -> Option<String>, memo: &mut DistanceMemo) -> Result<usize> {
+    let refs: Vec<(String, String)> = data.copies.iter().filter(|(_, c)| training.contains(&c.culture))
+        .filter_map(|(a, _)| data.fa.get("full_its").and_then(|f| f.get(a)).map(|s| (a.clone(), s.clone()))).collect();
+    let mut changed = 0;
+    for row in rows {
+        for c in R4_COLUMNS { row.insert(c.into(), String::new()); }
+        let fired = row_value(row, "its_rule_fired")? == "1";
+        let status = row_value(row, "status")?.to_owned();
+        if !fired && status != "known species" && status != "known species group" { continue; }
+        let acc = row_value(row, "accession")?.to_owned();
+        let Some(q) = query("full_its", &acc).filter(|q| !q.is_empty()) else { continue };
+        let mut d = f64::INFINITY;
+        for (a, s) in &refs { d = d.min(n6_pair(memo, &acc, &q, a, s)?); }
+        if !d.is_finite() { continue; }
+        if let Ok(rec) = row_value(row, "its_nearest_training_pct")?.parse::<f64>() {
+            if (py_round_float(d, 3) - rec).abs() > 1e-9 { bail!("{acc}: nearest training ITS distance {d} does not match the recorded {rec}"); }
+        }
+        row.insert("r4_threshold_pct".into(), py_float(py_round_float(t, 4)));
+        let fire = d > t;
+        let add = |row: &mut Row, text: String| -> Result<()> {
+            let e = row_value(row, "reasons")?.to_owned();
+            row.insert("reasons".into(), if e.is_empty() { text } else { format!("{e}; {text}") });
+            Ok(())
+        };
+        if fire && !fired {
+            let genus = row_value(row, "call_genera")?.to_owned();
+            row.insert("status".into(), "novel species, genus known".into());
+            row.insert("placement".into(), genus);
+            row.insert("novelty_claim".into(), "candidate_only".into());
+            add(row, format!("N6 (R4) full ITS {d:.1}% from the nearest training culture, above the pooled threshold {t:.2}%"))?;
+            row.insert("r4_action".into(), "demote".into());
+            changed += 1;
+        } else if !fire && fired {
+            let species = row_value(row, "call_species")?.to_owned();
+            let group = species.split(';').filter(|s| !s.is_empty()).count() > 1;
+            row.insert("status".into(), if group { "known species group" } else { "known species" }.into());
+            row.insert("placement".into(), species);
+            row.insert("novelty_claim".into(), "not_asserted".into());
+            let kept: Vec<String> = row_value(row, "reasons")?.split("; ").filter(|r| !r.starts_with("N6 ")).map(str::to_owned).collect();
+            row.insert("reasons".into(), kept.join("; "));
+            row.insert("r4_action".into(), "restore".into());
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
 /// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
 /// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
-pub const RULES: [&str; 11] = ["r5", "r5s", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r3a", "r3a_all", "r3b"];
+pub const RULES: [&str; 12] = ["r5", "r5s", "r4", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r3a", "r3a_all", "r3b"];
 
 /// R8 (flag) or R8d (demote) on rows; returns the number of calls flagged or demoted.
 fn apply_r8(demote: bool, rows: &mut [Row]) -> Result<usize> {
@@ -415,7 +569,7 @@ impl DistanceMemo {
 }
 
 pub struct InsideRule {
-    items: BTreeMap<(&'static str, String), BTreeSet<(String, String)>>,
+    pub(crate) items: BTreeMap<(&'static str, String), BTreeSet<(String, String)>>,
     /// unnamed training cultures: (marker, culture) -> main-type sequences
     unnamed: BTreeMap<(&'static str, String), BTreeSet<String>>,
     /// per marker: the limit, or None when fewer than two values exist
@@ -619,9 +773,16 @@ pub fn run_rules_on_tables(fixture_dir: &Path, rules: &[&str], tables: &[(std::p
 /// As `run_rules_on_tables`, with the queries' own placement table for sequences outside the culture
 /// reference (R7 reads each query's genus clade from it).
 pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>) -> Result<ArmReport> {
+    run_rules_full(fixture_dir, rules, tables, extra_windows, query_placements, None)
+}
+
+/// As `run_rules_with_placements`, with R4's prepared inputs.
+pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>, r4: Option<&R4Inputs>) -> Result<ArmReport> {
     if rules.is_empty() || rules.iter().any(|r| !RULES.contains(r)) { bail!("rules must be among {}", RULES.join(", ")); }
     if rules.contains(&"r7") && !rules.iter().any(|r| r.starts_with("r3")) { bail!("R7 runs only with an R3 arm (r3a, r3a_all or r3b)"); }
     if rules.contains(&"r8") && rules.contains(&"r8d") { bail!("r8 and r8d are variants of one rule; choose one"); }
+    if rules.contains(&"r4") && r4.is_none() { bail!("R4 needs its LongGloDB inputs (--r4-longglodb, --r4-longglodb-table, --r4-name-checks)"); }
+    let mut r4_thresholds: BTreeMap<String, f64> = BTreeMap::new();
     let qplace: BTreeMap<String, Row> = match query_placements { Some(p) => read_row_map(&read_table_any(p)?), None => BTreeMap::new() };
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
     let all: StringSet = data.cultures.keys().cloned().collect();
@@ -676,6 +837,12 @@ pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(
                 }
                 demoted += motifs[held].apply(&data, &mut part, &query, &mut memo)?;
             }
+            if let (true, Some(r4)) = (rules.contains(&"r4"), r4) {
+                let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                let training: StringSet = all.difference(&held_set).cloned().collect();
+                if !r4_thresholds.contains_key(held) { r4_thresholds.insert(held.clone(), r4.threshold(&data, &training, &mut memo)?); }
+                demoted += apply_r4(&data, &training, r4_thresholds[held], &mut part, &query, &mut memo)?;
+            }
             if rules.contains(&"r1a") { demoted += rule.apply_r1a(&data, &mut part, &query, &mut memo)?; }
             if rules.contains(&"r1b") {
                 let key = (held.clone(), placements_path.clone());
@@ -706,6 +873,7 @@ pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(
         }
         let mut headers = t.headers.clone();
         if motif_variant.is_some() { headers.extend(R5_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if rules.contains(&"r4") { headers.extend(R4_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1a") { headers.extend(R1A_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r1b") { headers.extend(R1B_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }

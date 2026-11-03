@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, R4Inputs, R4_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1662,6 +1662,64 @@ mod tests {
         assert_eq!(got["EUKARYOME: new lineages resting on one marker"], (2186, 0, 77));
         assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 13));
         assert_eq!(rows.iter().filter(|r| r["status"] == "insufficient evidence").count(), 77);
+    }
+
+    fn r4_scores(r4: &rules::R4Inputs, tables: &[(std::path::PathBuf, &str)], windows: &BTreeMap<String, SeqMap>) -> (BTreeMap<String, (usize, usize, usize)>, usize) {
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let tmp = std::env::temp_dir().join(format!("amfsplit-r4-{}-{}", std::process::id(), RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pairs: Vec<_> = tables.iter().enumerate().map(|(i, (p, _))| (p.clone(), tmp.join(format!("{i}.tsv")))).collect();
+        let report = rules::run_rules_full(&fx, &["r4"], &pairs, windows, None, Some(r4)).unwrap();
+        let euk = std::env::var("AMFSPLIT_BENCHMARK").ok().map(|b| Path::new(&b).join("benchmarks/eukaryome/predictions.predictions.tsv"));
+        let mut got = BTreeMap::new();
+        for design in tables.iter().map(|(_, d)| *d).collect::<BTreeSet<_>>() {
+            let mine: Vec<_> = report.results.iter().filter(|r| tables.iter().any(|(p, d)| *d == design && *p == r.table)).cloned().collect();
+            for s in rules::score_results(&fx, design, &mine, euk.as_deref()).unwrap() { got.insert(format!("{}: {}", s.design, s.outcome), (s.n, s.frozen, s.arm)); }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        (got, report.demoted)
+    }
+
+    #[test]
+    fn r4_fitted_on_v4_at_the_99th_percentile_is_the_frozen_n6() {
+        let g = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming/golden");
+        let (got, changed) = r4_scores(&rules::R4Inputs::v4_only(99.0), &[(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"),
+            (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")], &BTreeMap::new());
+        assert_eq!(changed, 0);
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 745));
+        assert_eq!(got["species holdout: false known"], (803, 18, 18));
+    }
+
+    #[test]
+    fn r4_development_estimates() {
+        // first computed 3 November 2026 by the arm code, at the 95th percentile (decision 6)
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R4 estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let checks = Path::new(&bench).join("benchmarks/protocol_v3/r4_name_checks.tsv");
+        let lgdb_table = m4.join("runs_lgdb/06_scores/A_primary_v1.copies.tsv");
+        // the name checks are verified inside prepare(); a failed check stops here
+        let prep = |fit: &str| rules::R4Inputs::prepare(&fx, fit, 95.0, &lw, &lgdb_table, &checks).unwrap();
+        let g = fx.join("golden");
+        let holdouts = [(g.join("epa_species_clades_n6_physical_culture.copies.tsv"), "culture"), (g.join("epa_species_clades_n6_physical_species.copies.tsv"), "species")];
+        let (got, _) = r4_scores(&prep("pooled"), &holdouts, &BTreeMap::new());
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 734));
+        assert_eq!(got["species holdout: false known"], (803, 18, 13));
+        let (got, _) = r4_scores(&prep("longglodb"), &holdouts, &BTreeMap::new());
+        assert_eq!(got["culture holdout: known species kept"], (755, 745, 750));
+        assert_eq!(got["species holdout: false known"], (803, 18, 21));
+        let (got, changed) = r4_scores(&prep("v4"), &[(m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), "longglodb")], &lw);
+        assert_eq!((changed, got["LongGloDB: false known (absent taxa)"], got["LongGloDB: known species kept"]), (0, (102, 4, 4), (164, 136, 136)));
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let (got, _) = r4_scores(&prep("pooled"), &[(m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz"), "eukaryome")], &ew);
+        assert_eq!(got["EUKARYOME: false known (absent taxa)"], (2706, 13, 9));
+        assert_eq!(got["EUKARYOME: known species kept"], (199, 152, 144));
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub const BOOTSTRAP_SEED: u64 = 20_261_102;
 const KNOWN: [&str; 2] = ["known species", "known species group"];
 
 /// One table run through an arm: its rows before and after, in the same order.
+#[derive(Clone)]
 pub struct TableResult {
     pub table: PathBuf,
     pub frozen: Vec<Row>,

@@ -90,6 +90,21 @@ struct ArmArgs {
     /// on sequences outside the culture reference
     #[arg(long)]
     query_placements: Option<PathBuf>,
+    /// R4: the LongGloDB windows prefix (full_its, s58 and the inside markers)
+    #[arg(long)]
+    r4_longglodb: Option<PathBuf>,
+    /// R4: a table with accession, culture and organism for those LongGloDB ASVs
+    #[arg(long)]
+    r4_longglodb_table: Option<PathBuf>,
+    /// R4: the name checks (benchmarks/protocol_v3/r4_name_checks.tsv), verified before fitting
+    #[arg(long)]
+    r4_name_checks: Option<PathBuf>,
+    /// R4: pooled (the rule), or v4 or longglodb (cross-fitted development estimates)
+    #[arg(long, default_value = "pooled")]
+    r4_fit: String,
+    /// R4: the percentile of the refitted threshold (decision 6 picked 95)
+    #[arg(long, default_value_t = 95.0)]
+    r4_percentile: f64,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
@@ -107,7 +122,11 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
     };
     let rules: Vec<&str> = a.rule.iter().map(String::as_str).collect();
-    let r = amfsplit_naming::run_rules_with_placements(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref())?;
+    let r4 = match (&a.r4_longglodb, &a.r4_longglodb_table, &a.r4_name_checks) {
+        (Some(w), Some(t), Some(c)) => Some(amfsplit_naming::R4Inputs::prepare(&naming_data(), &a.r4_fit, a.r4_percentile, &amfsplit_naming::read_windows(w)?, t, c)?),
+        _ => None,
+    };
+    let r = amfsplit_naming::run_rules_full(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref(), r4.as_ref())?;
     if let Some(design) = &a.score {
         let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
         println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",
