@@ -13,6 +13,7 @@ mod n6_its;
 mod external;
 pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 mod evidence;
+pub mod newick;
 mod gate3;
 mod name;
 mod rules;
@@ -1932,6 +1933,25 @@ mod tests {
         assert_eq!(evidence::spanned_coverage(&hit(1, 500, 600, 101, 500, 500, 800), 0), 1.0);
         // 20 query bases before the alignment, 10 reference Ns: 480 / (800 - 10 - 320)
         assert_eq!(evidence::spanned_coverage(&hit(21, 500, 1, 480, 480, 500, 800), 10), 480.0 / 470.0);
+    }
+
+    #[test]
+    fn pruning_matches_biophylo_on_every_withholding_fold() {
+        // the frozen rounds prune the withheld tips from V18's backbone topology with Bio.Phylo; each
+        // fold's pruned topology must hash to what Bio.Phylo 1.84 writes for it (51 folds)
+        use sha2::{Digest, Sha256};
+        let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/withhold");
+        let source = std::fs::read_to_string(d.join("backbone.topology.newick")).unwrap();
+        let unpruned = newick::Tree::parse(&source).unwrap();
+        assert_eq!(unpruned.to_newick(), source, "the writer must round-trip the frozen topology");
+        let folds = read_table(&d.join("folds.tsv")).unwrap().rows;
+        assert_eq!(folds.len(), 51);
+        for f in &folds {
+            let mut t = unpruned.clone();
+            for tip in f["removed_ref_ids"].split(',') { t.prune(tip).unwrap(); }
+            let got = format!("{:x}", Sha256::digest(t.to_newick().as_bytes()));
+            assert_eq!(got, f["biophylo_1_84_sha256"], "{} {}", f["rank"], f["target"]);
+        }
     }
 
     #[test]
