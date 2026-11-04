@@ -54,6 +54,12 @@
 //! not the comparison, so a known call fires when its nearest training-culture ITS distance (recomputed
 //! exactly, and checked against the recorded one) exceeds the refitted threshold. `fit` "v4" or
 //! "longglodb" gives the cross-fitted development estimates; "pooled" is the rule.
+//!
+//! R6, triage labels instead of filtering: each sequence carries its triage label (`amfsplit triage`:
+//! LR0R-FLR2 against V18 with its outgroups, vsearch, --min-id 90). AMF and unresolved sequences are
+//! named; a new lineage on an unresolved sequence becomes "new lineage, AMF membership unconfirmed"
+//! (T1). non_AMF, no_hit and no_window sequences are reported, not named (T2). Sequences without a
+//! label (culture copies) are left as they are.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -71,6 +77,46 @@ pub const R3_COLUMNS: [&str; 3] = ["r3_genus", "r3_evidence", "r3_flag"];
 pub const R7_COLUMNS: [&str; 2] = ["r7_genus_clade_unit", "r7_action"];
 pub const R8_COLUMNS: [&str; 1] = ["r8_action"];
 pub const R4_COLUMNS: [&str; 2] = ["r4_threshold_pct", "r4_action"];
+pub const R6_COLUMNS: [&str; 3] = ["r6_triage", "r6_best_target", "r6_action"];
+
+/// R6 on rows, from a triage table (read_id, call, best_target, identity). Returns calls changed.
+fn apply_r6(labels: &BTreeMap<String, Row>, rows: &mut [Row]) -> Result<usize> {
+    let mut changed = 0;
+    for row in rows {
+        for c in R6_COLUMNS { row.insert(c.into(), String::new()); }
+        let acc = row_value(row, "accession")?.to_owned();
+        let Some(l) = labels.get(&acc) else { continue };
+        let call = l.get("call").cloned().unwrap_or_default();
+        let target = format!("{} at {}%", l.get("best_target").cloned().unwrap_or_default(), l.get("identity").cloned().unwrap_or_default());
+        row.insert("r6_triage".into(), call.clone());
+        row.insert("r6_best_target".into(), target.clone());
+        let add = |row: &mut Row, text: String| -> Result<()> {
+            let e = row_value(row, "reasons")?.to_owned();
+            row.insert("reasons".into(), if e.is_empty() { text } else { format!("{e}; {text}") });
+            Ok(())
+        };
+        match call.as_str() {
+            "AMF" => {}
+            "unresolved" => {
+                if row_value(row, "status")? == "novel lineage" {
+                    row.insert("status".into(), "new lineage, AMF membership unconfirmed".into());
+                    add(row, format!("T1 triage unresolved: best V18 hit {target}, under the AMF identity"))?;
+                    row.insert("r6_action".into(), "T1".into());
+                    changed += 1;
+                }
+            }
+            other => {
+                row.insert("status".into(), format!("not named (triage: {other})"));
+                for c in ["call_species", "call_genera", "placement"] { row.insert(c.into(), String::new()); }
+                row.insert("novelty_claim".into(), "not_asserted".into());
+                add(row, format!("T2 triage {other}: best hit {target}; reported, not named"))?;
+                row.insert("r6_action".into(), "T2".into());
+                changed += 1;
+            }
+        }
+    }
+    Ok(changed)
+}
 
 /// The LongGloDB side of R4's pool, prepared once: each kept culture's main-type ITS sequences.
 pub struct R4Inputs {
@@ -225,7 +271,7 @@ fn apply_r4(data: &FrozenData, training: &StringSet, t: f64, rows: &mut [Row], q
 }
 /// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
 /// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
-pub const RULES: [&str; 12] = ["r5", "r5s", "r4", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r3a", "r3a_all", "r3b"];
+pub const RULES: [&str; 13] = ["r5", "r5s", "r4", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r6", "r3a", "r3a_all", "r3b"];
 
 /// R8 (flag) or R8d (demote) on rows; returns the number of calls flagged or demoted.
 fn apply_r8(demote: bool, rows: &mut [Row]) -> Result<usize> {
@@ -804,10 +850,20 @@ pub fn run_rules_with_placements(fixture_dir: &Path, rules: &[&str], tables: &[(
 
 /// As `run_rules_with_placements`, with R4's prepared inputs.
 pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>, r4: Option<&R4Inputs>) -> Result<ArmReport> {
+    run_rules_triage(fixture_dir, rules, tables, extra_windows, query_placements, r4, None)
+}
+
+/// As `run_rules_full`, with R6's triage table.
+pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>, r4: Option<&R4Inputs>, triage: Option<&Path>) -> Result<ArmReport> {
     if rules.is_empty() || rules.iter().any(|r| !RULES.contains(r)) { bail!("rules must be among {}", RULES.join(", ")); }
     if rules.contains(&"r7") && !rules.iter().any(|r| r.starts_with("r3")) { bail!("R7 runs only with an R3 arm (r3a, r3a_all or r3b)"); }
     if rules.contains(&"r8") && rules.contains(&"r8d") { bail!("r8 and r8d are variants of one rule; choose one"); }
     if rules.contains(&"r4") && r4.is_none() { bail!("R4 needs its LongGloDB inputs (--r4-longglodb, --r4-longglodb-table, --r4-name-checks)"); }
+    if rules.contains(&"r6") && triage.is_none() { bail!("R6 needs the triage table (--triage, from amfsplit triage)"); }
+    let labels: BTreeMap<String, Row> = match triage {
+        Some(t) => read_table_any(t)?.rows.into_iter().filter_map(|r| r.get("read_id").cloned().map(|k| (k, r))).collect(),
+        None => BTreeMap::new(),
+    };
     let mut r4_thresholds: BTreeMap<String, f64> = BTreeMap::new();
     let qplace: BTreeMap<String, Row> = match query_placements { Some(p) => read_row_map(&read_table_any(p)?), None => BTreeMap::new() };
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
@@ -888,6 +944,7 @@ pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::
                 demoted += apply_r7(&data, &holders, &mut part, &|acc| qplace.get(acc).or_else(|| place_rows.get(acc)).cloned())?;
             }
             if rules.contains(&"r8") || rules.contains(&"r8d") { demoted += apply_r8(rules.contains(&"r8d"), &mut part)?; }
+            if rules.contains(&"r6") { demoted += apply_r6(&labels, &mut part)?; }
             if let Some(v) = r3.first() {
                 if *v != "r3b" && !genus_rules.contains_key(held) {
                     let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
@@ -906,6 +963,7 @@ pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::
         if rules.contains(&"r2") { headers.extend(R2_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r7") { headers.extend(R7_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if rules.contains(&"r8") || rules.contains(&"r8d") { headers.extend(R8_COLUMNS.iter().map(|c| (*c).to_owned())); }
+        if rules.contains(&"r6") { headers.extend(R6_COLUMNS.iter().map(|c| (*c).to_owned())); }
         if !r3.is_empty() { headers.extend(R3_COLUMNS.iter().map(|c| (*c).to_owned())); }
         std::fs::write(out, serialize_table(&headers, &rows))?;
         n_rows += rows.len();

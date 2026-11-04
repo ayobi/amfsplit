@@ -180,6 +180,8 @@ fn r8_new_lineages(design: &str, results: &[TableResult], kind: &dyn Fn(&TableRe
     Ok(by.into_iter().map(|(k, u)| summarize(design, &format!("new lineages resting on one marker{}{k}", if k.is_empty() { "" } else { ", " }), u)).collect())
 }
 
+fn has_r6(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r6_triage"))) }
+
 fn has_r3(results: &[TableResult]) -> bool { results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r3_flag"))) }
 
 /// Short-5.8S divergent copies called divergent, clustered by species (or culture, when unnamed).
@@ -396,6 +398,26 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.push(summarize("EUKARYOME", "absent lineages given a genus: flagged by R3", agf));
             }
             if has_r8(results) { out.extend(r8_new_lineages("EUKARYOME", results, &|_| Some(String::new()))?); }
+            if has_r6(results) {
+                // filtering (the frozen pipeline names AMF only) against R6 (AMF and unresolved named)
+                let (mut reach, mut kept, mut t1) = (Vec::new(), Vec::new(), Vec::new());
+                for t in results {
+                    for (f, a) in pairs(t)? {
+                        let p = &roles[col(a, "accession")];
+                        let (role, own, organism) = (col(p, "role"), col(p, "own_species_in_v4"), col(p, "organism"));
+                        let label = col(a, "r6_triage");
+                        let named = label == "AMF" || label == "unresolved";
+                        if role == "novel lineage, genus not in v4" {
+                            reach.push(Unit { cluster: organism.into(), frozen: label == "AMF", arm: named });
+                            t1.push(Unit { cluster: organism.into(), frozen: false, arm: col(a, "r6_action") == "T1" });
+                        }
+                        if !own.is_empty() { kept.push(Unit { cluster: organism.into(), frozen: label == "AMF" && known(f) && calls(f, own), arm: named && known(a) && calls(a, own) }); }
+                    }
+                }
+                out.push(summarize("EUKARYOME", "absent lineages reaching naming (filtering, R6)", reach));
+                out.push(summarize("EUKARYOME", "absent lineages: new lineage, AMF membership unconfirmed", t1));
+                out.push(summarize("EUKARYOME", "known species kept (filtering, R6)", kept));
+            }
         }
         _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome)"),
     }

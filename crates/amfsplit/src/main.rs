@@ -106,6 +106,9 @@ struct ArmArgs {
     /// cross-fitted false known among percentiles whose pooled limits demote no more than F's)
     #[arg(long, default_value_t = 97.5)]
     r4_percentile: f64,
+    /// R6: the triage table (`amfsplit triage` --out prefix + .triage.tsv)
+    #[arg(long)]
+    triage: Option<PathBuf>,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
@@ -127,7 +130,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         (Some(w), Some(t), Some(c)) => Some(amfsplit_naming::R4Inputs::prepare(&naming_data(), &a.r4_fit, a.r4_percentile, &amfsplit_naming::read_windows(w)?, t, c)?),
         _ => None,
     };
-    let r = amfsplit_naming::run_rules_full(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref(), r4.as_ref())?;
+    let r = amfsplit_naming::run_rules_triage(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref(), r4.as_ref(), a.triage.as_deref())?;
     if let Some(design) = &a.score {
         let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
         println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",
@@ -139,7 +142,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         std::fs::write(&path, amfsplit_naming::scores_tsv(&scores))?;
         println!("scores written to {}", path.display());
     }
-    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed or flagged (R5 D4, R1a U1, R1b U2, R2 N7, R7 G2, R8 N8, R3 G1; {} known calls before)",
+    println!("{} on {} rows in {} rounds of {} table(s): {} calls changed or flagged (R5 D4, R1a U1, R1b U2, R2 N7, R7 G2, R8 N8, R6 T1/T2, R3 G1; {} known calls before)",
              rules.join("+"), r.rows, r.rounds, pairs.len(), r.demoted, r.known_before);
     if r.limits.len() <= 3 { for l in &r.limits { println!("  limits: {l}"); } } else { println!("  limits: {} distinct sets (refitted per round)", r.limits.len()); }
     Ok(())

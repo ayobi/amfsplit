@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, R4Inputs, R4_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, run_rules_triage, R4Inputs, R4_COLUMNS, R6_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1762,6 +1762,29 @@ mod tests {
                 assert_eq!(got, want, "p{p} {chain:?}");
             }
         }
+    }
+
+    #[test]
+    fn r6_development_estimates() {
+        // first computed 4 November 2026: triage of the 5,511 EUKARYOME overlap reads (protocol_v3/r6_triage_positives.tsv)
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED R6 estimates: set AMFSPLIT_BENCHMARK and AMFSPLIT_EUK");
+            return;
+        };
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let b = Path::new(&bench);
+        let table = b.join("benchmarks/m4_external_holdout/runs_euk/06_scores/A_primary_v2.copies.tsv.gz");
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let out = std::env::temp_dir().join(format!("amfsplit-r6-{}.tsv", std::process::id()));
+        let r = rules::run_rules_triage(&fx, &["r6"], &[(table, out.clone())], &ew, None, None, Some(&b.join("benchmarks/protocol_v3/r6_triage_positives.tsv"))).unwrap();
+        let _ = std::fs::remove_file(&out);
+        let got: BTreeMap<String, (usize, usize, usize)> = rules::score_results(&fx, "eukaryome", &r.results, Some(&b.join("benchmarks/eukaryome/predictions.predictions.tsv"))).unwrap()
+            .into_iter().map(|s| (s.outcome, (s.n, s.frozen, s.arm))).collect();
+        assert_eq!(got["absent lineages reaching naming (filtering, R6)"], (2629, 1496, 2628));
+        assert_eq!(got["absent lineages: new lineage, AMF membership unconfirmed"], (2629, 0, 847));
+        assert_eq!(got["known species kept (filtering, R6)"], (199, 152, 152));
+        assert_eq!(got["false known (absent taxa)"], (2706, 13, 13));
     }
 
     #[test]
