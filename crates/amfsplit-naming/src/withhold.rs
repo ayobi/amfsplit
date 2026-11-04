@@ -23,9 +23,11 @@ pub struct WithholdOptions {
     pub epa_ng: String,
     /// a frozen round folder (runs/<key>) to compare every stage with
     pub compare_with: Option<PathBuf>,
+    /// stage 06, naming the fold's queries: (naming fixture, holdout_plan.json, fold key)
+    pub naming: Option<(PathBuf, PathBuf, String)>,
 }
 
-pub struct WithholdReport { pub stages: Vec<(String, String)>, pub placement: Option<TableMatch>, pub table: PathBuf }
+pub struct WithholdReport { pub stages: Vec<(String, String)>, pub placement: Option<TableMatch>, pub table: PathBuf, pub named: Vec<crate::TableReport> }
 
 fn tool(name: &str) -> Result<PathBuf> {
     let p = Path::new(name);
@@ -165,7 +167,13 @@ pub fn run_withhold(o: &WithholdOptions) -> Result<WithholdReport> {
         let frozen_table = f.join("05_summary/lsu_placements.copies.tsv");
         if frozen_table.is_file() { placement = Some(compare_up_to_ties(&rows, &ties, &frozen_table)?); }
     }
-    Ok(WithholdReport { stages, placement, table })
+    // 06_evaluation_v2: the fold's queries named with its held cultures from this round's placements
+    let named = match &o.naming {
+        Some((fixture, plan, key)) => crate::name_withheld_round(fixture, plan, key, &table, &o.out.join("06_evaluation_v2"),
+                                                                  o.compare_with.as_ref().map(|f| f.join("06_evaluation_v2")).as_deref())?,
+        None => Vec::new(),
+    };
+    Ok(WithholdReport { stages, placement, table, named })
 }
 
 /// The V18 reference IDs a fold of the frozen plan withholds (holdout_plan.json).

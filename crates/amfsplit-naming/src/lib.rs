@@ -1254,6 +1254,44 @@ fn compare_table(expected_path: &Path, results: &[Row], table: &str) -> Result<T
     Ok(TableReport { table: table.into(), rows: results.len(), byte_identical, differing_cells, first_differences: diffs })
 }
 
+/// Stage 06 of a withholding round (`amfsplit withhold --name`): the fold's queries named with its held
+/// cultures from the round's own placement table, species clades then N6 (all ITS copy classes, 99th
+/// percentile), exactly as `run_gate0b_rounds` names the published rounds. Writes
+/// external_holdout_v1/_v2.copies.tsv into `out_dir` in the frozen column order, and compares them with
+/// `compare_dir`'s tables of the same names when given.
+pub fn name_withheld_round(fixture_dir: &Path, plan: &Path, key: &str, placements_table: &Path, out_dir: &Path, compare_dir: Option<&Path>) -> Result<Vec<TableReport>> {
+    let plan: Value = serde_json::from_str(&fs::read_to_string(plan)?)?;
+    let fold = plan.get("folds").and_then(Value::as_array).and_then(|f| f.iter().find(|x| x.get("key").and_then(Value::as_str) == Some(key)))
+        .ok_or_else(|| anyhow!("no fold {key} in the plan"))?;
+    let strings = |field: &str| -> Result<Vec<String>> {
+        fold.get(field).and_then(Value::as_array).ok_or_else(|| anyhow!("{key}: no {field}"))?
+            .iter().map(|v| v.as_str().map(str::to_owned).ok_or_else(|| anyhow!("{key}: {field} holds a non-string"))).collect()
+    };
+    let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
+    let trainers: BTreeMap<String, Trainer> = ["VT", "SH"].iter().map(|arm| Ok(((*arm).to_owned(), Trainer::new(&data, arm)?))).collect::<Result<_>>()?;
+    let drop: StringSet = strings("held_cultures")?.into_iter().collect();
+    let query_ids = strings("query_ids")?;
+    let training: StringSet = data.cultures.keys().filter(|c| !drop.contains(*c)).cloned().collect();
+    let placements = read_row_map(&read_table(placements_table)?);
+    let v1 = name_round(&data, &trainers, &placements, &drop, &training, &query_ids)?;
+    let before: BTreeMap<String, Row> = v1.iter().map(|r| Ok((row_value(r, "accession")?.to_owned(), r.clone()))).collect::<Result<_>>()?;
+    let mut v2 = v1.clone();
+    let mut its_rule = n6_its::ItsRule::new(&data)?;
+    its_rule.apply(&data, &mut v2, &before, &training, n6_its::Pool::All, 99)?;
+    for r in v2.iter_mut() { genus_fields(&data, r)?; }
+    fs::create_dir_all(out_dir)?;
+    let golden = fixture_dir.join("golden");
+    let mut reports = Vec::new();
+    for (name, rows, columns_from) in [("external_holdout_v1", &v1, golden.join("epa_species_clades_physical_species.copies.tsv")),
+                                       ("external_holdout_v2", &v2, golden.join("epa_species_clades_n6_physical_species.copies.tsv"))] {
+        let file = format!("{name}.copies.tsv");
+        let headers = match compare_dir { Some(d) if d.join(&file).is_file() => read_table(&d.join(&file))?.headers, _ => read_table(&columns_from)?.headers };
+        fs::write(out_dir.join(&file), serialize_table(&headers, rows))?;
+        if let Some(d) = compare_dir { if d.join(&file).is_file() { reports.push(compare_table(&d.join(&file), rows, name)?); } }
+    }
+    Ok(reports)
+}
+
 /// Gate 0b, remaining rounds. `benchmark_dir` is an amf-novelty-benchmark checkout (release 0.3.2 or
 /// later); `only` keeps the rounds whose key starts with it. Every file read is checked against the
 /// pinned holdout plan and rounds/MANIFEST.json.
@@ -1952,6 +1990,26 @@ mod tests {
             for tip in f["removed_ref_ids"].split(',') { t.prune(tip).unwrap(); }
             let got = format!("{:x}", Sha256::digest(t.to_newick().as_bytes()));
             assert_eq!(got, f["biophylo_1_84_sha256"], "{} {}", f["rank"], f["target"]);
+        }
+    }
+
+    #[test]
+    fn stage_06_names_published_rounds_byte_identically() {
+        // a withholding round's stage 06 named from the round's published placements must reproduce its
+        // published evaluation tables byte for byte (v1 and v2)
+        let Some(bench) = std::env::var("AMFSPLIT_BENCHMARK").ok().filter(|v| !v.is_empty()) else {
+            eprintln!("SKIPPED stage 06: set AMFSPLIT_BENCHMARK");
+            return;
+        };
+        let m4 = Path::new(&bench).join("benchmarks/m4_external_holdout");
+        for key in ["species_diversispora_celata", "species_funneliformis_mosseae", "genus_acaulospora"] {
+            let round = m4.join("rounds").join(key);
+            let out = std::env::temp_dir().join(format!("amfsplit-stage06-{}-{key}", std::process::id()));
+            let reports = name_withheld_round(&fixture(), &m4.join("holdout_plan.json"), key, &round.join("05_summary/lsu_placements.copies.tsv"),
+                                              &out, Some(&round.join("06_evaluation_v2"))).unwrap();
+            let _ = std::fs::remove_dir_all(&out);
+            assert_eq!(reports.len(), 2, "{key}");
+            for r in &reports { assert!(r.byte_identical, "{key} {}: {:?}", r.table, r.first_differences); }
         }
     }
 

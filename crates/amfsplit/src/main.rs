@@ -92,6 +92,9 @@ struct WithholdArgs {
     /// A frozen round folder (runs/<key>) to compare every stage with
     #[arg(long)]
     compare_with: Option<PathBuf>,
+    /// Stage 06: name the fold's queries with its held cultures (needs --fold and --plan)
+    #[arg(long, requires = "fold")]
+    name: bool,
 }
 
 fn withhold_cmd(a: WithholdArgs) -> Result<()> {
@@ -101,11 +104,16 @@ fn withhold_cmd(a: WithholdArgs) -> Result<()> {
     };
     if removed.is_empty() { anyhow::bail!("nothing to withhold: give --fold with --plan, or --removed"); }
     let o = amfsplit_naming::withhold::WithholdOptions { frozen_reference: a.frozen_reference, removed, queries: a.queries, out: a.out,
-        threads: a.threads, mafft: a.mafft, raxml_ng: a.raxml_ng, epa_ng: a.epa_ng, compare_with: a.compare_with };
+        threads: a.threads, mafft: a.mafft, raxml_ng: a.raxml_ng, epa_ng: a.epa_ng, compare_with: a.compare_with,
+        naming: match (a.name, &a.fold, &a.plan) { (true, Some(k), Some(p)) => Some((naming_data(), p.clone(), k.clone())), _ => None } };
     let r = amfsplit_naming::withhold::run_withhold(&o)?;
     println!("placement table: {}", r.table.display());
     for (stage, verdict) in &r.stages { println!("  {stage:40} {verdict}"); }
     if let Some(p) = &r.placement { println!("  {:40} {}", "05_summary/lsu_placements.copies.tsv", amfsplit_naming::withhold::verdict(p)); }
+    for t in &r.named {
+        let v = if t.byte_identical { "identical".to_owned() } else { format!("DIFFERS in {} cells: {}", t.differing_cells, t.first_differences.join("; ")) };
+        println!("  {:40} {v}", format!("06_evaluation_v2/{}.copies.tsv", t.table));
+    }
     Ok(())
 }
 
