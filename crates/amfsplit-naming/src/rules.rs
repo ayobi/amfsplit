@@ -59,7 +59,11 @@
 //! LR0R-FLR2 against V18 with its outgroups, vsearch, --min-id 90). AMF and unresolved sequences are
 //! named; a new lineage on an unresolved sequence becomes "new lineage, AMF membership unconfirmed"
 //! (T1). non_AMF, no_hit and no_window sequences are reported, not named (T2). Sequences without a
-//! label (culture copies) are left as they are.
+//! label (culture copies) are left as they are. R6 runs before R7, so a sequence whose AMF membership
+//! triage could not confirm never takes an AMF genus from R7.
+//!
+//! S, the candidate default (Protocol v3, arms table): R5 (a variant), R4, R1a, R2, R6, R7, R8 (flag) and
+//! an R3 variant, applied in this order.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -271,7 +275,14 @@ fn apply_r4(data: &FrozenData, training: &StringSet, t: f64, rows: &mut [Row], q
 }
 /// In protocol order: the decision step R5 (or its SSU-fallback variant r5s), then R1a or R1b, then
 /// R2; the R3 flags (r3a, r3a_all, r3b) read the final calls.
-pub const RULES: [&str; 13] = ["r5", "r5s", "r4", "r1a", "r1b", "r2", "r7", "r8", "r8d", "r6", "r3a", "r3a_all", "r3b"];
+pub const RULES: [&str; 13] = ["r5", "r5s", "r4", "r1a", "r1b", "r2", "r6", "r7", "r8", "r8d", "r3a", "r3a_all", "r3b"];
+
+/// S, the candidate default, with its R5 and R3 variants (chosen on the confirmation set by their
+/// adoption rules; on development data r5s and r3b).
+pub fn s_chain<'a>(r5: &'a str, r3: &'a str) -> Result<Vec<&'a str>> {
+    if !["r5", "r5s"].contains(&r5) || !["r3a", "r3a_all", "r3b"].contains(&r3) { bail!("S takes an R5 variant (r5, r5s) and an R3 variant (r3a, r3a_all, r3b)"); }
+    Ok(vec![r5, "r4", "r1a", "r2", "r6", "r7", "r8", r3])
+}
 
 /// R8 (flag) or R8d (demote) on rows; returns the number of calls flagged or demoted.
 fn apply_r8(demote: bool, rows: &mut [Row]) -> Result<usize> {
@@ -939,6 +950,7 @@ pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path
                 demoted += blocks[&key].apply(&data, &mut part)?;
             }
             if rules.contains(&"r2") { demoted += rule.apply(&mut part, &query, &mut memo)?; }
+            if rules.contains(&"r6") { demoted += apply_r6(&labels, &mut part)?; }
             if rules.contains(&"r7") {
                 let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
                 let training: StringSet = all.difference(&held_set).cloned().collect();
@@ -946,7 +958,6 @@ pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path
                 demoted += apply_r7(&data, &holders, &mut part, &|acc| qplace.get(acc).or_else(|| place_rows.get(acc)).cloned())?;
             }
             if rules.contains(&"r8") || rules.contains(&"r8d") { demoted += apply_r8(rules.contains(&"r8d"), &mut part)?; }
-            if rules.contains(&"r6") { demoted += apply_r6(&labels, &mut part)?; }
             if let Some(v) = r3.first() {
                 if *v != "r3b" && !genus_rules.contains_key(held) {
                     let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();

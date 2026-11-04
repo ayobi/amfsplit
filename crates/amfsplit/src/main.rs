@@ -109,6 +109,12 @@ struct ArmArgs {
     /// R6: the triage table (`amfsplit triage` --out prefix + .triage.tsv)
     #[arg(long)]
     triage: Option<PathBuf>,
+    /// S (--rule s, the candidate default): its R5 variant
+    #[arg(long, default_value = "r5s")]
+    s_r5: String,
+    /// S: its R3 variant
+    #[arg(long, default_value = "r3b")]
+    s_r3: String,
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
@@ -125,7 +131,7 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         }
         _ => anyhow::bail!("give -o for one table, or --out-dir for several"),
     };
-    let rules: Vec<&str> = a.rule.iter().map(String::as_str).collect();
+    let rules: Vec<&str> = if a.rule.len() == 1 && a.rule[0] == "s" { amfsplit_naming::s_chain(&a.s_r5, &a.s_r3)? } else { a.rule.iter().map(String::as_str).collect() };
     let r4 = match (&a.r4_longglodb, &a.r4_longglodb_table, &a.r4_name_checks) {
         (Some(w), Some(t), Some(c)) => Some(amfsplit_naming::R4Inputs::prepare(&naming_data(), &a.r4_fit, a.r4_percentile, &amfsplit_naming::read_windows(w)?, t, c)?),
         _ => None,

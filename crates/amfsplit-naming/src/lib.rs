@@ -16,7 +16,7 @@ mod evidence;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, run_rules_triage, R4Inputs, R4_COLUMNS, R6_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, run_rules_triage, s_chain, R4Inputs, R4_COLUMNS, R6_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1809,6 +1809,62 @@ mod tests {
         // every non-AMF read that reaches naming is a new lineage labelled unconfirmed, or an artifact
         assert_eq!((rows.len(), st("new lineage, AMF membership unconfirmed"), st("artifact")), (495, 485, 10));
         assert!(rows.iter().all(|r| r["call_species"].is_empty() && r["call_genera"].is_empty()));
+    }
+
+    #[test]
+    fn s_development_estimates() {
+        // S, the candidate default (r5s, r4 at the 97.5th, r1a, r2, r6, r7, r8, r3b), first computed 4 November 2026
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED S estimates: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let b = Path::new(&bench);
+        let m4 = b.join("benchmarks/m4_external_holdout");
+        let lw = rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap();
+        let ew = rules::read_windows(&Path::new(&euk).join("overlap.win")).unwrap();
+        let checks = b.join("benchmarks/protocol_v3/r4_name_checks.tsv");
+        let lgdb_v1 = m4.join("runs_lgdb/06_scores/A_primary_v1.copies.tsv");
+        let empty = std::env::temp_dir().join(format!("amfsplit-s-empty-{}.tsv", std::process::id()));
+        std::fs::write(&empty, "read_id\tcall\tbest_target\tidentity\n").unwrap();
+        let chain = rules::s_chain("r5s", "r3b").unwrap();
+        static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let score = |design: &str, tables: Vec<std::path::PathBuf>, w: &BTreeMap<String, SeqMap>, qp: Option<std::path::PathBuf>, triage: &Path, fit: &str| {
+            let r4 = rules::R4Inputs::prepare(&fx, fit, 97.5, &lw, &lgdb_v1, &checks).unwrap();
+            let tmp = std::env::temp_dir().join(format!("amfsplit-s-{}-{}", std::process::id(), RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+            std::fs::create_dir_all(&tmp).unwrap();
+            let pairs: Vec<_> = tables.iter().enumerate().map(|(i, p)| (p.clone(), tmp.join(format!("{i}.tsv")))).collect();
+            let r = rules::run_rules_triage(&fx, &chain, &pairs, w, qp.as_deref(), Some(&r4), Some(triage)).unwrap();
+            let got: BTreeMap<String, usize> = rules::score_results(&fx, design, &r.results, Some(&b.join("benchmarks/eukaryome/predictions.predictions.tsv"))).unwrap()
+                .into_iter().map(|s| (s.outcome, s.arm)).collect();
+            let _ = std::fs::remove_dir_all(&tmp);
+            got
+        };
+        let g = fx.join("golden");
+        let c = score("culture", vec![g.join("epa_species_clades_n6_physical_culture.copies.tsv")], &BTreeMap::new(), None, &empty, "pooled");
+        assert_eq!((c["known species kept"], c["short-5.8S copies recognised"]), (741, 40));
+        let s = score("species", vec![g.join("epa_species_clades_n6_physical_species.copies.tsv")], &BTreeMap::new(), None, &empty, "pooled");
+        assert_eq!((s["false known"], s["short-5.8S copies recognised"], s["new-lineage calls given the right genus"], s["new-lineage calls given a wrong genus"]), (18, 40, 179, 0));
+        let e = score("eukaryome", vec![m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz")], &ew, Some(m4.join("runs_euk/A/05_summary/lsu_placements.copies.tsv.gz")),
+            &b.join("benchmarks/protocol_v3/r6_triage_positives.tsv"), "pooled");
+        // R6 before R7: R7's wrong genera on absent lineages fall from 24 (alone) to 7
+        assert_eq!((e["false known (absent taxa)"], e["known species kept"], e["absent lineages (Nanoglomus aside): wrong genus given"], e["absent lineages: new lineage, AMF membership unconfirmed"]), (1, 148, 7, 847));
+        let l = score("longglodb", vec![m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv")], &lw, Some(m4.join("runs_lgdb/A/05_summary/lsu_placements.copies.tsv")), &empty, "v4");
+        assert_eq!((l["false known (absent taxa)"], l["known species kept"], l["absent species in v4 genera: genus right"], l["absent genera: a genus given (wrong)"]), (4, 135, 51, 0));
+        let mut species_rounds = Vec::new();
+        let mut genus_rounds = Vec::new();
+        for e in std::fs::read_dir(m4.join("rounds")).unwrap() {
+            let d = e.unwrap().path();
+            let n = d.file_name().unwrap().to_string_lossy().into_owned();
+            let bucket = if n.starts_with("species_") { &mut species_rounds } else if n.starts_with("genus_") { &mut genus_rounds } else { continue };
+            for k in ["external_holdout_v2", "full_reference_v2"] { bucket.push(d.join(format!("06_evaluation_v2/{k}.copies.tsv"))); }
+        }
+        let r = score("rounds", species_rounds, &BTreeMap::new(), None, &empty, "pooled");
+        assert_eq!((r["false known, V18 removed"], r["false known, V18 intact"], r["genus right, genus held by another culture, V18 removed"]), (36, 9, 487));
+        let gr = score("genus", genus_rounds, &BTreeMap::new(), None, &empty, "pooled");
+        assert_eq!((gr["wrong-genus calls flagged, V18 removed"], gr["wrong-genus calls flagged, V18 intact"]), (40, 0));
+        let _ = std::fs::remove_file(&empty);
     }
 
     #[test]
