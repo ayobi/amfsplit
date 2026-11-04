@@ -56,6 +56,57 @@ enum Command {
     Name(NameArgs),
     /// Apply an opt-in Protocol v3 rule to a named-row table (development estimates, dress rehearsal)
     Arm(ArmArgs),
+    /// A withholding round: V18 with a taxon's sequences removed, re-placed as the frozen LSU-removal rounds did
+    /// (prune, MAFFT L-INS-i, raxml-ng --evaluate, MAFFT --addfragments, EPA-ng, summary)
+    Withhold(WithholdArgs),
+}
+
+#[derive(Args)]
+struct WithholdArgs {
+    /// The frozen V18 reference folder (reference.unaligned.fasta, reference_metadata.tsv, backbone.topology.newick)
+    #[arg(long)]
+    frozen_reference: PathBuf,
+    /// A fold of the frozen plan (holdout_plan.json key, e.g. species_diversispora_celata)
+    #[arg(long, requires = "plan")]
+    fold: Option<String>,
+    /// benchmarks/m4_external_holdout/holdout_plan.json
+    #[arg(long)]
+    plan: Option<PathBuf>,
+    /// Or the V18 reference IDs to withhold, comma-separated
+    #[arg(long, value_delimiter = ',')]
+    removed: Vec<String>,
+    /// LSU windows to place (FASTA)
+    #[arg(long)]
+    queries: PathBuf,
+    #[arg(short, long)]
+    out: PathBuf,
+    /// The rounds' thread count (default 8): MAFFT L-INS-i and EPA-ng use it, raxml-ng and the query MAFFT at most 4
+    #[arg(long, default_value_t = 8)]
+    threads: usize,
+    #[arg(long, default_value = "mafft")]
+    mafft: String,
+    #[arg(long, default_value = "raxml-ng")]
+    raxml_ng: String,
+    #[arg(long, default_value = "epa-ng")]
+    epa_ng: String,
+    /// A frozen round folder (runs/<key>) to compare every stage with
+    #[arg(long)]
+    compare_with: Option<PathBuf>,
+}
+
+fn withhold_cmd(a: WithholdArgs) -> Result<()> {
+    let removed = match (&a.fold, &a.plan) {
+        (Some(key), Some(plan)) => amfsplit_naming::withhold::fold_removed(plan, key)?,
+        _ => a.removed.clone(),
+    };
+    if removed.is_empty() { anyhow::bail!("nothing to withhold: give --fold with --plan, or --removed"); }
+    let o = amfsplit_naming::withhold::WithholdOptions { frozen_reference: a.frozen_reference, removed, queries: a.queries, out: a.out,
+        threads: a.threads, mafft: a.mafft, raxml_ng: a.raxml_ng, epa_ng: a.epa_ng, compare_with: a.compare_with };
+    let r = amfsplit_naming::withhold::run_withhold(&o)?;
+    println!("placement table: {}", r.table.display());
+    for (stage, verdict) in &r.stages { println!("  {stage:40} {verdict}"); }
+    if let Some(p) = &r.placement { println!("  {:40} {}", "05_summary/lsu_placements.copies.tsv", amfsplit_naming::withhold::verdict(p)); }
+    Ok(())
 }
 
 #[derive(Args)]
@@ -892,6 +943,7 @@ fn main() -> std::process::ExitCode {
         Command::Db(a) => db_cmd(a),
         Command::Name(a) => name_cmd(a),
         Command::Arm(a) => arm_cmd(a),
+        Command::Withhold(a) => withhold_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

@@ -221,7 +221,7 @@ pub fn summarize_placements(jplace: &Path, metadata: &Path, queries: &Path, alig
 /// EPA-ng's list, and EPA-ng does not list tied placements in the same order on every run.
 pub type TopTies = BTreeMap<String, BTreeSet<usize>>;
 
-pub(crate) fn summarize_with_ties(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<(Vec<Row>, TopTies)> {
+pub fn summarize_with_ties(jplace: &Path, metadata: &Path, queries: &Path, aligned: &Path, mass: f64) -> Result<(Vec<Row>, TopTies)> {
     let meta: BTreeMap<String, Row> = read_table(metadata)?.rows.into_iter()
         .map(|r| Ok((row_value(&r, "ref_id")?.to_owned(), r))).collect::<Result<_>>()?;
     let data: Value = serde_json::from_str(&fs::read_to_string(jplace).with_context(|| format!("reading {}", jplace.display()))?)?;
@@ -457,7 +457,7 @@ pub struct PlaceReport {
 }
 
 /// FASTA in file order, as Biopython reads it: ID = first word of the header, sequence uppercased.
-pub(crate) fn read_fasta_ordered(path: &Path) -> Result<Vec<(String, String)>> {
+pub fn read_fasta_ordered(path: &Path) -> Result<Vec<(String, String)>> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut out: Vec<(String, String)> = Vec::new();
     let mut seen = BTreeSet::new();

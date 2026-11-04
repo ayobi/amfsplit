@@ -56,6 +56,20 @@ impl Tree {
         out
     }
 
+    /// The tip set under every clade, the root and the tips included (Bio.Phylo `find_clades`).
+    pub fn clade_tip_sets(&self) -> Vec<std::collections::BTreeSet<String>> {
+        fn under(t: &Tree, n: usize, out: &mut Vec<std::collections::BTreeSet<String>>) -> std::collections::BTreeSet<String> {
+            let mut set = std::collections::BTreeSet::new();
+            if t.nodes[n].children.is_empty() { set.insert(t.nodes[n].name.clone()); }
+            for &c in &t.nodes[n].children { set.extend(under(t, c, out)); }
+            out.push(set.clone());
+            set
+        }
+        let mut out = Vec::new();
+        under(self, self.root, &mut out);
+        out
+    }
+
     /// Path from the root's child down to the named tip (Bio.Phylo `get_path`, root excluded).
     fn path(&self, tip: &str) -> Option<Vec<usize>> {
         fn walk(t: &Tree, n: usize, tip: &str, acc: &mut Vec<usize>) -> bool {
