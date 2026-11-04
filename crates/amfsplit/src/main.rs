@@ -95,6 +95,9 @@ struct WithholdArgs {
     /// Stage 06: name the fold's queries with its held cultures (needs --fold and --plan)
     #[arg(long, requires = "fold")]
     name: bool,
+    /// Reuse a finished round's 01_reference and 02_model (same fold), so only the queries are placed
+    #[arg(long)]
+    reuse_reference: Option<PathBuf>,
 }
 
 fn withhold_cmd(a: WithholdArgs) -> Result<()> {
@@ -105,7 +108,8 @@ fn withhold_cmd(a: WithholdArgs) -> Result<()> {
     if removed.is_empty() { anyhow::bail!("nothing to withhold: give --fold with --plan, or --removed"); }
     let o = amfsplit_naming::withhold::WithholdOptions { frozen_reference: a.frozen_reference, removed, queries: a.queries, out: a.out,
         threads: a.threads, mafft: a.mafft, raxml_ng: a.raxml_ng, epa_ng: a.epa_ng, compare_with: a.compare_with,
-        naming: match (a.name, &a.fold, &a.plan) { (true, Some(k), Some(p)) => Some((naming_data(), p.clone(), k.clone())), _ => None } };
+        naming: match (a.name, &a.fold, &a.plan) { (true, Some(k), Some(p)) => Some((naming_data(), p.clone(), k.clone())), _ => None },
+        reuse_reference: a.reuse_reference };
     let r = amfsplit_naming::withhold::run_withhold(&o)?;
     println!("placement table: {}", r.table.display());
     for (stage, verdict) in &r.stages { println!("  {stage:40} {verdict}"); }

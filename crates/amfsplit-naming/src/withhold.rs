@@ -25,6 +25,9 @@ pub struct WithholdOptions {
     pub compare_with: Option<PathBuf>,
     /// stage 06, naming the fold's queries: (naming fixture, holdout_plan.json, fold key)
     pub naming: Option<(PathBuf, PathBuf, String)>,
+    /// a finished round of the same fold whose 01_reference and 02_model are reused, so only the new
+    /// queries are aligned and placed (withheld K: a species' K sequences in its own round)
+    pub reuse_reference: Option<PathBuf>,
 }
 
 pub struct WithholdReport { pub stages: Vec<(String, String)>, pub placement: Option<TableMatch>, pub table: PathBuf, pub named: Vec<crate::TableReport> }
@@ -75,6 +78,19 @@ pub fn run_withhold(o: &WithholdOptions) -> Result<WithholdReport> {
     let [r1, r2, r3, r4, r5] = ["01_reference", "02_model", "03_queries", "04_epa", "05_summary"].map(|d| o.out.join(d));
     for d in [&r1, &r2, &r3, &r4, &r5] { fs::create_dir_all(d)?; }
     let mafft = tool(&o.mafft)?;
+    if let Some(src) = &o.reuse_reference {
+        for d in ["01_reference", "02_model"] {
+            for e in fs::read_dir(src.join(d)).with_context(|| format!("reading {}", src.join(d).display()))? {
+                let p = e?.path();
+                if p.is_file() { fs::copy(&p, o.out.join(d).join(p.file_name().unwrap()))?; }
+            }
+        }
+        // the reused round must be this fold: same withheld tips, same kept reference
+        let kept_ids: BTreeSet<String> = read_fasta_ordered(&o.out.join("01_reference/aligned.fasta"))?.into_iter().map(|(x, _)| x).collect();
+        let raw_ids: BTreeSet<String> = read_fasta_ordered(&fr.join("reference.unaligned.fasta"))?.into_iter().map(|(x, _)| x).collect();
+        let expect: BTreeSet<String> = raw_ids.difference(&removed).cloned().collect();
+        if kept_ids != expect { bail!("{} is not a round of this fold (its reference holds other taxa)", src.display()); }
+    }
     // 01_reference
     let raw = read_fasta_ordered(&fr.join("reference.unaligned.fasta"))?;
     let meta_text = fs::read_to_string(fr.join("reference_metadata.tsv"))?;
