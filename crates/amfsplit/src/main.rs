@@ -102,8 +102,9 @@ struct ArmArgs {
     /// R4: pooled (the rule), or v4 or longglodb (cross-fitted development estimates)
     #[arg(long, default_value = "pooled")]
     r4_fit: String,
-    /// R4: the percentile of the refitted threshold (decision 6 picked 95)
-    #[arg(long, default_value_t = 95.0)]
+    /// R4: the percentile of the refitted limits (decision 6, amended 3 November 2026: 97.5, the lowest
+    /// cross-fitted false known among percentiles whose pooled limits demote no more than F's)
+    #[arg(long, default_value_t = 97.5)]
     r4_percentile: f64,
 }
 
