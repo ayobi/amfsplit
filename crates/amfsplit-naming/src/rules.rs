@@ -866,6 +866,13 @@ pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::
 
 /// As `run_rules_full`, with R6's triage table.
 pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: Option<&Path>, r4: Option<&R4Inputs>, triage: Option<&Path>) -> Result<ArmReport> {
+    let qps: Vec<&Path> = query_placements.into_iter().collect();
+    run_rules_multi(fixture_dir, rules, tables, extra_windows, &qps, r4, triage)
+}
+
+/// As `run_rules_triage`, with several query placement tables (merged by accession, first wins), so the
+/// strata of both external tests can be scored in one run.
+pub fn run_rules_multi(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::PathBuf, std::path::PathBuf)], extra_windows: &BTreeMap<String, SeqMap>, query_placements: &[&Path], r4: Option<&R4Inputs>, triage: Option<&Path>) -> Result<ArmReport> {
     if rules.is_empty() || rules.iter().any(|r| !RULES.contains(r)) { bail!("rules must be among {}", RULES.join(", ")); }
     if rules.contains(&"r7") && !rules.iter().any(|r| r.starts_with("r3")) { bail!("R7 runs only with an R3 arm (r3a, r3a_all or r3b)"); }
     if rules.contains(&"r8") && rules.contains(&"r8d") { bail!("r8 and r8d are variants of one rule; choose one"); }
@@ -876,7 +883,8 @@ pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path
         None => BTreeMap::new(),
     };
     let mut r4_thresholds: BTreeMap<String, f64> = BTreeMap::new();
-    let qplace: BTreeMap<String, Row> = match query_placements { Some(p) => read_row_map(&read_table_any(p)?), None => BTreeMap::new() };
+    let mut qplace: BTreeMap<String, Row> = BTreeMap::new();
+    for p in query_placements { for (k, v) in read_row_map(&read_table_any(p)?) { qplace.entry(k).or_insert(v); } }
     let data = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
     let all: StringSet = data.cultures.keys().cloned().collect();
     let query = |m: &str, acc: &str| data.fa.get(m).and_then(|f| f.get(acc)).or_else(|| extra_windows.get(m).and_then(|f| f.get(acc))).cloned();

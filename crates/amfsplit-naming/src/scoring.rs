@@ -304,6 +304,48 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.extend(genus_flags(data, "LSU-removal rounds", results, &first_outcome)?);
             }
         }
+        "strata" => {
+            // Protocol v3's strata, pooled over the external tests' named rows: condition A (reference intact)
+            // and W (each K sequence with its own species withheld); the stratum is each row's test_role
+            let has_r5 = results.iter().any(|t| t.arm.first().is_some_and(|r| r.contains_key("r5_motif")));
+            let mut by: BTreeMap<&str, Vec<Unit>> = BTreeMap::new();
+            for t in results {
+                for (f, a) in pairs(t)? {
+                    let (cond, role, org) = (col(f, "condition"), col(f, "test_role"), col(f, "organism"));
+                    let og = normalise_genus(org.split_whitespace().next().unwrap_or(""));
+                    let u = |fr: bool, ar: bool| Unit { cluster: org.to_owned(), frozen: fr, arm: ar };
+                    let mut push = |k: &'static str, unit: Unit| by.entry(k).or_default().push(unit);
+                    match (cond, role) {
+                        ("A", "known species") => {
+                            push("K, reference intact: known species kept", u(known(f) && calls(f, org), known(a) && calls(a, org)));
+                            if has_r8(results) { push("K, reference intact: single-marker new lineages (R8)", u(false, !col(a, "r8_action").is_empty())); }
+                        }
+                        ("W", "known species") => push("withheld K: false known", u(known(f), known(a))),
+                        ("A", "novel species, genus in v4") => {
+                            push("A: false known", u(known(f), known(a)));
+                            if has_r7(results) && col(f, "status") == "novel lineage" { push("A: new lineages given the right genus (R7)", u(false, genera_of(a).contains(&og.as_str()))); }
+                        }
+                        ("A", "novel lineage, genus not in v4") => push("L: false known", u(known(f), known(a))),
+                        ("A", "genus only") => push("G: known calls", u(known(f), known(a))),
+                        _ => {}
+                    }
+                    if cond == "A" && has_r3(results) {
+                        let g = genera_of(a);
+                        if !g.is_empty() {
+                            let right = g.contains(&og.as_str());
+                            if !right && (role == "novel species, genus in v4" || role == "novel lineage, genus not in v4") { push("A and L: wrong genera flagged (R3)", u(false, g1(a))); }
+                            if right && (role == "known species" || role == "novel species, genus in v4") { push("K and A: right genera falsely flagged (R3)", u(false, g1(a))); }
+                        }
+                    }
+                    if has_r7(results) && col(a, "r7_action") == "G2" && !genera_of(a).contains(&og.as_str()) { push("wrong genera added by R7: flagged", u(false, g1(a))); }
+                    if has_r5 && col(a, "r5_motif") == "1" {
+                        if og == "Rhizophagus" || og == "Rhizoglomus" { push("Rhizoglomus-labelled motif carriers called divergent (R5)", u(col(f, "status") == "divergent class", col(a, "status") == "divergent class")); }
+                        else { push("other motif carriers reclassified (R5)", u(false, col(a, "r5_action") == "D4")); }
+                    }
+                }
+            }
+            for (k, units) in by { out.push(summarize("strata", k, units)); }
+        }
         "genus" => {
             let kind = |t: &TableResult| -> Option<String> {
                 let key = t.table.parent()?.parent()?.file_name()?.to_string_lossy().into_owned();
@@ -419,7 +461,7 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                 out.push(summarize("EUKARYOME", "known species kept (filtering, R6)", kept));
             }
         }
-        _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome)"),
+        _ => bail!("unknown scoring design {design} (culture, species, rounds, genus, longglodb, eukaryome, strata)"),
     }
     Ok(out)
 }

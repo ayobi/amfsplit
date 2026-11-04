@@ -164,7 +164,7 @@ struct ArmArgs {
     table: Vec<PathBuf>,
     /// Windows prefix for sequences outside the culture reference (<prefix>.full_its.fasta etc.)
     #[arg(short = 'w', long)]
-    windows: Option<PathBuf>,
+    windows: Vec<PathBuf>,
     /// Output table (one --table)
     #[arg(short = 'o', long, conflicts_with = "out_dir")]
     out: Option<PathBuf>,
@@ -172,7 +172,7 @@ struct ArmArgs {
     #[arg(long)]
     out_dir: Option<PathBuf>,
     /// Score frozen against arm under a design: culture, species, rounds, genus, longglodb or eukaryome
-    #[arg(long, value_parser = ["culture", "species", "rounds", "genus", "longglodb", "eukaryome"])]
+    #[arg(long, value_parser = ["culture", "species", "rounds", "genus", "longglodb", "eukaryome", "strata"])]
     score: Option<String>,
     /// The EUKARYOME test's locked roles (benchmarks/eukaryome/predictions.predictions.tsv), for --score eukaryome
     #[arg(long)]
@@ -180,7 +180,7 @@ struct ArmArgs {
     /// The queries' own placement table (e.g. runs_euk/A/05_summary/lsu_placements.copies.tsv.gz), for R7
     /// on sequences outside the culture reference
     #[arg(long)]
-    query_placements: Option<PathBuf>,
+    query_placements: Vec<PathBuf>,
     /// R4: the LongGloDB windows prefix (full_its, s58 and the inside markers)
     #[arg(long)]
     r4_longglodb: Option<PathBuf>,
@@ -209,7 +209,8 @@ struct ArmArgs {
 }
 
 fn arm_cmd(a: ArmArgs) -> Result<()> {
-    let extra = match &a.windows { Some(p) => amfsplit_naming::read_windows(p)?, None => Default::default() };
+    let mut extra: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = Default::default();
+    for p in &a.windows { for (m, seqs) in amfsplit_naming::read_windows(p)? { extra.entry(m).or_default().extend(seqs); } }
     let pairs: Vec<(PathBuf, PathBuf)> = match (&a.out, &a.out_dir) {
         (Some(o), None) if a.table.len() == 1 => vec![(a.table[0].clone(), o.clone())],
         (None, Some(d)) => {
@@ -227,7 +228,8 @@ fn arm_cmd(a: ArmArgs) -> Result<()> {
         (Some(w), Some(t), Some(c)) => Some(amfsplit_naming::R4Inputs::prepare(&naming_data(), &a.r4_fit, a.r4_percentile, &amfsplit_naming::read_windows(w)?, t, c)?),
         _ => None,
     };
-    let r = amfsplit_naming::run_rules_triage(&naming_data(), &rules, &pairs, &extra, a.query_placements.as_deref(), r4.as_ref(), a.triage.as_deref())?;
+    let qps: Vec<&std::path::Path> = a.query_placements.iter().map(|p| p.as_path()).collect();
+    let r = amfsplit_naming::run_rules_multi(&naming_data(), &rules, &pairs, &extra, &qps, r4.as_ref(), a.triage.as_deref())?;
     if let Some(design) = &a.score {
         let scores = amfsplit_naming::score_results(&naming_data(), design, &r.results, a.euk_predictions.as_deref())?;
         println!("{:<20} {:<28} {:>14} {:>14}   arm - frozen, 95% CI (points; {} species-cluster replicates, seed {})", "design", "outcome", "frozen", "arm",

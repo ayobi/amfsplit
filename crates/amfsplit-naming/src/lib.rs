@@ -18,7 +18,7 @@ pub mod withhold;
 mod gate3;
 mod name;
 mod rules;
-pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, run_rules_triage, s_chain, R4Inputs, R4_COLUMNS, R6_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
+pub use rules::{read_windows, run_r2_on_tables, run_rules_on_tables, run_rules_with_placements, run_rules_full, run_rules_triage, run_rules_multi, s_chain, R4Inputs, R4_COLUMNS, R6_COLUMNS, R7_COLUMNS, R8_COLUMNS, score_results, ArmReport, INSIDE_MARKERS, R1A_COLUMNS, R1B_COLUMNS, R2_COLUMNS, R3_COLUMNS, R3B_CUT, R5_COLUMNS, RULES};
 mod scoring;
 pub use scoring::{scores_tsv, OutcomeScore, TableResult, BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED};
 pub use name::{build_db, run_name, DbOptions, NameOptions, NameReport, CALL_COLUMNS, NAME_COLUMNS};
@@ -1941,6 +1941,56 @@ mod tests {
     #[test]
     fn withheld_k_eukaryome_reproduces_its_published_w_tables() {
         withheld_k_reproduces("euk", "AMFSPLIT_EUK", 199, 10);
+    }
+
+    #[test]
+    fn strata_pooled_development_estimates() {
+        // Protocol v3's strata pooled over LongGloDB and EUKARYOME, condition A and withheld K (W); first computed
+        // 4 November 2026. R8 changes no call, so its run gives the frozen method's strata.
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED pooled strata: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        let b = Path::new(&bench).join("benchmarks");
+        let (m4, wk) = (b.join("m4_external_holdout"), b.join("protocol_v3/withheld_k"));
+        if !wk.is_dir() { eprintln!("SKIPPED pooled strata: {} is absent", wk.display()); return; }
+        let tables = [m4.join("runs_lgdb/06_scores/A_primary_v2.copies.tsv"), m4.join("runs_euk/06_scores/A_primary_v2.copies.tsv.gz"),
+                      wk.join("W_lgdb/W_primary_v2.copies.tsv.gz"), wk.join("W_euk/W_primary_v2.copies.tsv.gz")];
+        let mut windows: BTreeMap<String, SeqMap> = BTreeMap::new();
+        for w in [Path::new(&lgdb).join("lgdb_test"), Path::new(&euk).join("overlap.win")] {
+            for (m, seqs) in rules::read_windows(&w).unwrap() { windows.entry(m).or_default().extend(seqs); }
+        }
+        let qp = [m4.join("runs_lgdb/A/05_summary/lsu_placements.copies.tsv"), m4.join("runs_euk/A/05_summary/lsu_placements.copies.tsv.gz")];
+        let qps: Vec<&Path> = qp.iter().map(|p| p.as_path()).collect();
+        let fx = fixture();
+        let run = |chain: &[&str], r4: Option<&rules::R4Inputs>, triage: Option<&Path>| -> BTreeMap<String, (usize, usize, usize)> {
+            let tmp = std::env::temp_dir().join(format!("amfsplit-strata-{}-{}", std::process::id(), chain.len()));
+            std::fs::create_dir_all(&tmp).unwrap();
+            let pairs: Vec<_> = tables.iter().enumerate().map(|(i, p)| (p.clone(), tmp.join(format!("{i}.tsv")))).collect();
+            let r = rules::run_rules_multi(&fx, chain, &pairs, &windows, &qps, r4, triage).unwrap();
+            let _ = std::fs::remove_dir_all(&tmp);
+            rules::score_results(&fx, "strata", &r.results, None).unwrap().into_iter().map(|s| (s.outcome, (s.n, s.frozen, s.arm))).collect()
+        };
+        let f = run(&["r8"], None, None);
+        assert_eq!(f["K, reference intact: known species kept"], (363, 288, 288));
+        assert_eq!(f["withheld K: false known"], (363, 18, 18));
+        assert_eq!(f["A: false known"], (136, 17, 17));
+        assert_eq!(f["L: false known"], (2672, 0, 0));
+        assert_eq!(f["G: known calls"], (2620, 595, 595));
+        assert_eq!(f["K, reference intact: single-marker new lineages (R8)"], (363, 0, 0));
+        let r4 = rules::R4Inputs::prepare(&fx, "pooled", 97.5, &rules::read_windows(&Path::new(&lgdb).join("lgdb_test")).unwrap(),
+                                          &m4.join("runs_lgdb/06_scores/A_primary_v1.copies.tsv"), &b.join("protocol_v3/r4_name_checks.tsv")).unwrap();
+        let s = run(&rules::s_chain("r5s", "r3b").unwrap(), Some(&r4), Some(&b.join("protocol_v3/r6_triage_positives.tsv")));
+        assert_eq!(s["K, reference intact: known species kept"], (363, 288, 283));
+        assert_eq!(s["withheld K: false known"], (363, 18, 12));
+        assert_eq!(s["A: false known"], (136, 17, 5));
+        assert_eq!(s["Rhizoglomus-labelled motif carriers called divergent (R5)"], (110, 60, 108));
+        assert_eq!(s["other motif carriers reclassified (R5)"], (438, 0, 1));
+        assert_eq!(s["A: new lineages given the right genus (R7)"], (73, 0, 71));
+        assert_eq!(s["wrong genera added by R7: flagged"], (8, 0, 2));
+        assert_eq!(s["A and L: wrong genera flagged (R3)"], (1070, 0, 200));
+        assert_eq!(s["K and A: right genera falsely flagged (R3)"], (488, 0, 2));
     }
 
     #[test]
