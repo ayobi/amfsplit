@@ -1911,6 +1911,38 @@ mod tests {
         let _ = std::fs::remove_file(&empty);
     }
 
+    /// Withheld K from the published K placements (protocol_v3/withheld_k) must give the published W tables.
+    fn withheld_k_reproduces(test: &str, data_env: &str, want_n: usize, want_known: usize) {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(data)) = (var("AMFSPLIT_BENCHMARK"), var(data_env)) else {
+            eprintln!("SKIPPED withheld K ({test}): set AMFSPLIT_BENCHMARK and {data_env}");
+            return;
+        };
+        let wk = Path::new(&bench).join("benchmarks/protocol_v3/withheld_k");
+        if !wk.is_dir() { eprintln!("SKIPPED withheld K ({test}): {} is absent (benchmark checkout too old)", wk.display()); return; }
+        let out = std::env::temp_dir().join(format!("amfsplit-withheld-k-{}-{test}", std::process::id()));
+        let report = run_withheld_k(test, &fixture(), Path::new(&bench), Path::new(&data), &wk.join("rounds"), &out).unwrap();
+        for v in ["v1", "v2"] {
+            let got = std::fs::read_to_string(out.join(format!("W_primary_{v}.copies.tsv"))).unwrap();
+            let want = read_text_maybe_gzip(&wk.join(format!("W_{test}/W_primary_{v}.copies.tsv.gz"))).unwrap();
+            assert!(got == want, "{test} W_primary_{v} differs from the published table");
+        }
+        let _ = std::fs::remove_dir_all(&out);
+        let (n, known) = report.iter().fold((0, 0), |(n, k), (_, a, b)| (n + a, k + b));
+        assert_eq!((n, known), (want_n, want_known), "{test}");
+    }
+
+    #[test]
+    fn withheld_k_longglodb_reproduces_its_published_w_tables() {
+        // all 8 are MR101, labelled F. coronatus but F. mosseae by sequence
+        withheld_k_reproduces("lgdb", "AMFSPLIT_LGDB", 164, 8);
+    }
+
+    #[test]
+    fn withheld_k_eukaryome_reproduces_its_published_w_tables() {
+        withheld_k_reproduces("euk", "AMFSPLIT_EUK", 199, 10);
+    }
+
     #[test]
     fn r1a_reproduces_its_eukaryome_development_estimates() {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
