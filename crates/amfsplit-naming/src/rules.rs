@@ -78,6 +78,8 @@ pub struct R4Inputs {
     pub percentile: f64,
     /// (accession, culture, species, full ITS) of the main-type ASVs of named LongGloDB cultures
     lgdb: Vec<(String, String, String, String)>,
+    /// the same ASVs as R2's items: (marker, species) -> unique (sequence, culture)
+    lgdb_inside: BTreeMap<(&'static str, String), BTreeSet<(String, String)>>,
 }
 
 /// N6's pair distance: computed once per pair, from the copy whose accession sorts first (n6_its.rs).
@@ -87,7 +89,7 @@ fn n6_pair(memo: &mut DistanceMemo, a: &str, sa: &str, b: &str, sb: &str) -> Res
 
 impl R4Inputs {
     /// The frozen N6 refit (fit on v4 at `percentile`), without LongGloDB: for checks and tests.
-    pub fn v4_only(percentile: f64) -> Self { Self { fit: "v4".into(), percentile, lgdb: Vec::new() } }
+    pub fn v4_only(percentile: f64) -> Self { Self { fit: "v4".into(), percentile, lgdb: Vec::new(), lgdb_inside: BTreeMap::new() } }
 }
 
 impl R4Inputs {
@@ -128,6 +130,7 @@ impl R4Inputs {
         }
         // v4's 5.8S rule: a copy more than 3% from its culture's 5.8S medoid is divergent
         let mut lgdb = Vec::new();
+        let mut lgdb_inside: BTreeMap<(&'static str, String), BTreeSet<(String, String)>> = BTreeMap::new();
         for (culture, (organism, asvs)) in &by_culture {
             if excluded.contains(culture) || !is_named(organism) { continue; }
             let d = |a: &str, b: &str, memo: &mut DistanceMemo| -> Result<f64> { if a == b { Ok(0.0) } else { memo.d(&s58[a], &s58[b]) } };
@@ -138,10 +141,14 @@ impl R4Inputs {
                 if sum < best.0 { best = (sum, a.clone()); }
             }
             for a in asvs {
-                if d(a, &best.1, &mut memo)? <= 3.0 { if let Some(q) = its.get(a) { lgdb.push((a.clone(), culture.clone(), organism.clone(), q.clone())); } }
+                if d(a, &best.1, &mut memo)? > 3.0 { continue; }
+                if let Some(q) = its.get(a) { lgdb.push((a.clone(), culture.clone(), organism.clone(), q.clone())); }
+                for (m, _) in INSIDE_MARKERS {
+                    if let Some(q) = windows.get(m).and_then(|f| f.get(a)) { lgdb_inside.entry((m, organism.clone())).or_default().insert((q.clone(), culture.clone())); }
+                }
             }
         }
-        Ok(Self { fit: fit.into(), percentile, lgdb })
+        Ok(Self { fit: fit.into(), percentile, lgdb, lgdb_inside })
     }
 
     /// The round's refitted N6 threshold.
@@ -530,6 +537,31 @@ impl BlockRule {
 }
 
 /// Unique main-type sequences per (marker, species), training cultures only, each with its culture.
+/// The complex rule's limits: per marker, the percentile (exclusive) of each unique sequence-culture
+/// pair's distance to the nearest pair of another culture of its species, over species with two or more
+/// cultures. At the 99th percentile the arithmetic is the frozen one, bit for bit.
+fn complex_limits(items: &BTreeMap<(&'static str, String), BTreeSet<(String, String)>>, percentile: f64, memo: &mut DistanceMemo) -> Result<BTreeMap<&'static str, Option<f64>>> {
+    let k = (percentile * 10.0).round() as usize;
+    let mut limits = BTreeMap::new();
+    for (m, _) in INSIDE_MARKERS {
+        let mut vals = Vec::new();
+        for ((mm, _), set) in items {
+            if *mm != m || set.iter().map(|(_, c)| c).collect::<BTreeSet<_>>().len() < 2 { continue; }
+            for (s1, c1) in set {
+                let mut best: Option<f64> = None;
+                for (s2, c2) in set {
+                    if c2 == c1 { continue; }
+                    let d = memo.d(s1, s2)?;
+                    best = Some(best.map_or(d, |b: f64| b.min(d)));
+                }
+                if let Some(b) = best { vals.push(b); }
+            }
+        }
+        limits.insert(m, (vals.len() >= 2).then(|| if k == 990 { quantiles_exclusive(&vals, 100)[98] } else { quantiles_exclusive(&vals, 1000)[k - 1] }));
+    }
+    Ok(limits)
+}
+
 fn species_items(data: &FrozenData, training: &StringSet) -> BTreeMap<(&'static str, String), BTreeSet<(String, String)>> {
     let mut items: BTreeMap<(&'static str, String), BTreeSet<(String, String)>> = BTreeMap::new();
     for (acc, c) in &data.copies {
@@ -587,24 +619,18 @@ impl InsideRule {
                 if let Some(seq) = data.fa.get(m).and_then(|f| f.get(acc)) { unnamed.entry((m, c.culture.clone())).or_default().insert(seq.clone()); }
             }
         }
-        let mut limits = BTreeMap::new();
-        for (m, _) in INSIDE_MARKERS {
-            let mut vals = Vec::new();
-            for ((mm, _), set) in &items {
-                if *mm != m || set.iter().map(|(_, c)| c).collect::<BTreeSet<_>>().len() < 2 { continue; }
-                for (s1, c1) in set {
-                    let mut best: Option<f64> = None;
-                    for (s2, c2) in set {
-                        if c2 == c1 { continue; }
-                        let d = memo.d(s1, s2)?;
-                        best = Some(best.map_or(d, |b: f64| b.min(d)));
-                    }
-                    if let Some(b) = best { vals.push(b); }
-                }
-            }
-            limits.insert(m, (vals.len() >= 2).then(|| quantiles_exclusive(&vals, 100)[98]));
-        }
+        let limits = complex_limits(&items, 99.0, memo)?;
         Ok(Self { items, unnamed, limits })
+    }
+
+    /// As `fit`, with the limits refitted by R4 (pooled, or one collection for the cross-fits);
+    /// queries are still tested against the v4 training species.
+    pub(crate) fn fit_r4(data: &FrozenData, training: &StringSet, r4: &R4Inputs, memo: &mut DistanceMemo) -> Result<Self> {
+        let mut rule = Self::fit(data, training, memo)?;
+        let mut pool: BTreeMap<(&'static str, String), BTreeSet<(String, String)>> = if r4.fit == "longglodb" { BTreeMap::new() } else { rule.items.clone() };
+        if r4.fit != "v4" { for (k, set) in &r4.lgdb_inside { pool.entry(k.clone()).or_default().extend(set.iter().cloned()); } }
+        rule.limits = complex_limits(&pool, r4.percentile, memo)?;
+        Ok(rule)
     }
 
     /// Distance from a query window to the nearest training main-type sequence of a species.
@@ -823,7 +849,8 @@ pub fn run_rules_full(fixture_dir: &Path, rules: &[&str], tables: &[(std::path::
             if !fits.contains_key(held) {
                 let held_set: StringSet = held.split(';').filter(|s| !s.is_empty()).map(str::to_owned).collect();
                 let training: StringSet = all.difference(&held_set).cloned().collect();
-                fits.insert(held.clone(), InsideRule::fit(&data, &training, &mut memo)?);
+                let fit = match (rules.contains(&"r4"), r4) { (true, Some(r4)) => InsideRule::fit_r4(&data, &training, r4, &mut memo)?, _ => InsideRule::fit(&data, &training, &mut memo)? };
+                fits.insert(held.clone(), fit);
             }
             let rule = &fits[held];
             limits.insert(rule.limits_text());
