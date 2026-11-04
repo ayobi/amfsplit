@@ -356,3 +356,85 @@ fn run_external(spec: &Spec, fixture_dir: &Path, bench: &Path, lg: &Path) -> Res
     Ok(ExternalReport { test: spec.name.into(), test_copies: copies.len(), test_cultures: cultures.len(), b_rounds: b_rounds.len(),
                     its_threshold_pct: t, its_threshold_n: n, tables: reports })
 }
+
+
+/// Withheld K (Protocol v3, section 5; condition W): each K sequence named with its own species withheld
+/// from the culture reference and from V18, in its own species' round. `k_rounds` holds one folder per
+/// species fold (`amfsplit withhold --reuse-reference`), whose 05_summary places that species' K
+/// sequences on the fold's pruned and refitted V18; the culture copies' placements in the round are the
+/// fold's published table (rounds/<key>/05_summary). Everything else is condition A's naming: the test
+/// cultures are held out of every call, and N6 runs over all ITS copy classes at the 99th percentile.
+/// Writes W_primary_v1/_v2.copies.tsv into `out` in condition A's column order.
+pub fn run_withheld_k(test: &str, fixture_dir: &Path, bench: &Path, data_dir: &Path, k_rounds: &Path, out: &Path) -> Result<Vec<(String, usize, usize)>> {
+    let spec = match test { "lgdb" => &LGDB, "euk" => &EUK, _ => bail!("--test must be lgdb or euk") };
+    let gz = if spec.gz { ".gz" } else { "" };
+    let m4 = bench.join("benchmarks/m4_external_holdout");
+    let runs = m4.join(spec.runs);
+    for (m, sha) in WINDOW_NAMES.iter().zip(spec.window_shas) { pinned(&data_dir.join(spec.window_file.replace("{m}", m)), sha)?; }
+    let evidence_path = if spec.evidence_in_runs { runs.join("01_evidence/test_evidence.json.gz") } else { data_dir.join("test_evidence.json.gz") };
+    pinned(&evidence_path, spec.evidence_sha)?;
+    let overlap_path = bench.join(spec.overlap);
+    pinned(&overlap_path, spec.overlap_sha)?;
+    let a_path = runs.join(format!("A/05_summary/lsu_placements.copies.tsv{gz}"));
+    pinned(&a_path, spec.a_placement_sha)?;
+    let mut cultures: BTreeMap<String, TestCulture> = BTreeMap::new();
+    let mut copies: Vec<(String, TestCopy)> = Vec::new();
+    for r in &read_table(&overlap_path)?.rows {
+        let role = row_value(r, "role")?;
+        if !TEST_ROLES.contains(&role) { continue; }
+        let (organism, code) = (row_value(r, "organism")?, row_value(r, "code")?);
+        let cid = if spec.one_culture_per_taxon { format!("{organism} | EUKARYOME") } else { format!("{organism} | LGDB {code}") };
+        let c = cultures.entry(cid.clone()).or_insert_with(|| TestCulture {
+            organism: organism.into(), code: code.into(), role: role.into(), labs: StringSet::new(), collections: StringSet::new() });
+        c.labs.insert(row_value(r, "lab")?.into());
+        c.collections.insert(row_value(r, "collection")?.into());
+        copies.push((row_value(r, "asv")?.into(), TestCopy { culture: cid, role: role.into(), organism: organism.into() }));
+    }
+    let by_id: BTreeMap<&str, &TestCopy> = copies.iter().map(|(x, t)| (x.as_str(), t)).collect();
+    let windows: BTreeMap<String, SeqMap> = WINDOW_NAMES.iter()
+        .map(|m| Ok(((*m).to_owned(), read_fasta(&data_dir.join(spec.window_file.replace("{m}", m)))?))).collect::<Result<_>>()?;
+    let evidence: Value = serde_json::from_str(&read_text_maybe_gzip(&evidence_path)?)?;
+    let base = FrozenData::load(fixture_dir.join("inputs/benchmark"))?;
+    let d = augment(&base, &cultures, &copies, &windows, &evidence, "VT")?;
+    drop(base);
+    // pairs of two test sequences are skipped; every other distance is cached once and serves every species
+    let held_test: StringSet = cultures.keys().cloned().collect();
+    let mut rule = n6_its::ItsRule::new_skipping_held_pairs(&d, &held_test)?;
+    let trainers: BTreeMap<String, Trainer> = ["VT", "SH"].iter().map(|arm| Ok(((*arm).to_owned(), Trainer::new(&d, arm)?))).collect::<Result<_>>()?;
+    let plan: Value = serde_json::from_str(&fs::read_to_string(m4.join("holdout_plan.json"))?)?;
+    let key_of: BTreeMap<String, String> = plan.get("folds").and_then(Value::as_array).ok_or_else(|| anyhow!("holdout_plan.json has no folds"))?
+        .iter().filter(|f| f.get("rank").and_then(Value::as_str) == Some("species"))
+        .filter_map(|f| Some((f.get("target")?.as_str()?.to_owned(), f.get("key")?.as_str()?.to_owned()))).collect();
+    let mut k_by_species: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (x, t) in &copies { if t.role == "known species" { k_by_species.entry(t.organism.clone()).or_default().push(x.clone()); } }
+    let (mut v1_all, mut v2_all, mut report) = (Vec::new(), Vec::new(), Vec::new());
+    for (species, ids) in &k_by_species {
+        let key = key_of.get(species).ok_or_else(|| anyhow!("{species} has no species fold in holdout_plan.json"))?;
+        let fold_table = m4.join("rounds").join(key).join("05_summary/lsu_placements.copies.tsv");
+        let k_table = k_rounds.join(key).join("05_summary/lsu_placements.copies.tsv");
+        if !k_table.is_file() { bail!("{} is missing: place {species}'s K sequences in its round first (amfsplit withhold --reuse-reference)", k_table.display()); }
+        let placements = placements_for(&d, &[fold_table.as_path(), k_table.as_path(), a_path.as_path()])?;
+        let k_placed: BTreeSet<String> = read_table(&k_table)?.rows.iter().filter_map(|r| r.get("accession").cloned()).collect();
+        if ids.iter().any(|x| !k_placed.contains(x)) { bail!("{key}: the K table does not place every K sequence of {species}"); }
+        let mut held = held_test.clone();
+        held.extend(d.by_species.get(species).cloned().unwrap_or_default().into_iter().filter(|c| !held_test.contains(c)));
+        let training: StringSet = d.cultures.keys().filter(|c| !held.contains(*c)).cloned().collect();
+        let mut v1 = name_round(&d, &trainers, &placements, &held, &training, ids)?;
+        let before: BTreeMap<String, Row> = v1.iter().map(|r| Ok((row_value(r, "accession")?.to_owned(), r.clone()))).collect::<Result<_>>()?;
+        let mut v2 = v1.clone();
+        rule.apply(&d, &mut v2, &before, &training, n6_its::Pool::All, 99)?;
+        for r in v2.iter_mut() { genus_fields(&d, r)?; }
+        annotate(&mut v1, "W", "primary", key, &cultures, &by_id)?;
+        annotate(&mut v2, "W", "primary", key, &cultures, &by_id)?;
+        let known = |rows: &[Row]| rows.iter().filter(|r| matches!(r.get("status").map(String::as_str), Some("known species" | "known species group"))).count();
+        report.push((species.clone(), ids.len(), known(&v2)));
+        v1_all.extend(v1);
+        v2_all.extend(v2);
+    }
+    fs::create_dir_all(out)?;
+    let headers = read_table_any(&runs.join(format!("06_scores/A_primary_v2.copies.tsv{gz}")))?.headers;
+    let headers_v1 = read_table_any(&runs.join(format!("06_scores/A_primary_v1.copies.tsv{gz}")))?.headers;
+    fs::write(out.join("W_primary_v1.copies.tsv"), serialize_table(&headers_v1, &v1_all))?;
+    fs::write(out.join("W_primary_v2.copies.tsv"), serialize_table(&headers, &v2_all))?;
+    Ok(report)
+}

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 mod n6_its;
 mod external;
-pub use external::{run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
+pub use external::{run_withheld_k, run_gate0b_euk, run_gate0b_lgdb, ExternalReport};
 mod evidence;
 pub mod newick;
 pub mod withhold;

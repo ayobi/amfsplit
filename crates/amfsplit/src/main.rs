@@ -59,6 +59,34 @@ enum Command {
     /// A withholding round: V18 with a taxon's sequences removed, re-placed as the frozen LSU-removal rounds did
     /// (prune, MAFFT L-INS-i, raxml-ng --evaluate, MAFFT --addfragments, EPA-ng, summary)
     Withhold(WithholdArgs),
+    /// Withheld K: name each K sequence of an external test with its own species withheld, in its species' round
+    WithheldK(WithheldKArgs),
+}
+
+#[derive(Args)]
+struct WithheldKArgs {
+    /// lgdb or euk
+    #[arg(long)]
+    test: String,
+    /// amf-novelty-benchmark checkout
+    #[arg(long)]
+    benchmark: PathBuf,
+    /// The test's windows folder (LongGloDB: lgdb_test.* and test_evidence.json.gz; EUKARYOME: overlap.win.*)
+    #[arg(long)]
+    data: PathBuf,
+    /// One folder per species fold with the K sequences placed (amfsplit withhold --reuse-reference)
+    #[arg(long)]
+    k_rounds: PathBuf,
+    #[arg(short, long)]
+    out: PathBuf,
+}
+
+fn withheld_k_cmd(a: WithheldKArgs) -> Result<()> {
+    let report = amfsplit_naming::run_withheld_k(&a.test, &naming_data(), &a.benchmark, &a.data, &a.k_rounds, &a.out)?;
+    let (n, fk): (usize, usize) = report.iter().fold((0, 0), |(n, f), (_, k, x)| (n + k, f + x));
+    for (species, k, known) in &report { println!("  {species:45} {known} of {k} K sequences called known with the species withheld"); }
+    println!("withheld K, {}: false known {fk} of {n}; W_primary tables in {}", a.test, a.out.display());
+    Ok(())
 }
 
 #[derive(Args)]
@@ -956,6 +984,7 @@ fn main() -> std::process::ExitCode {
         Command::Name(a) => name_cmd(a),
         Command::Arm(a) => arm_cmd(a),
         Command::Withhold(a) => withhold_cmd(a),
+        Command::WithheldK(a) => withheld_k_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
