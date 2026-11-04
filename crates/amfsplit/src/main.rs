@@ -61,6 +61,33 @@ enum Command {
     Withhold(WithholdArgs),
     /// Withheld K: name each K sequence of an external test with its own species withheld, in its species' round
     WithheldK(WithheldKArgs),
+    /// Protocol v3, section 8 applied: each rule alone on the strata, S last, and the report (dress rehearsal)
+    Adopt(AdoptArgs),
+}
+
+#[derive(Args)]
+struct AdoptArgs {
+    /// amf-novelty-benchmark checkout
+    #[arg(long)]
+    benchmark: PathBuf,
+    /// Local LongGloDB windows folder (lgdb_test.*, test_evidence.json.gz)
+    #[arg(long)]
+    lgdb: PathBuf,
+    /// Local EUKARYOME windows folder (overlap.win.*)
+    #[arg(long)]
+    euk: PathBuf,
+    #[arg(short, long)]
+    out: PathBuf,
+    /// Only these rules (r1, r2, r4, r5, r3, r7, r8, r6, v, s), comma-separated
+    #[arg(long, value_delimiter = ',')]
+    only: Vec<String>,
+}
+
+fn adopt_cmd(a: AdoptArgs) -> Result<()> {
+    let inp = amfsplit_naming::adopt::AdoptInputs { benchmark: a.benchmark, lgdb: a.lgdb, euk: a.euk, out: a.out.clone(), only: a.only };
+    for d in amfsplit_naming::adopt::run_adopt(&naming_data(), &inp)? { println!("{:8} {:45} {}", d.rule, d.verdict, d.measured); }
+    println!("report: {}", a.out.join("adopt_report.md").display());
+    Ok(())
 }
 
 #[derive(Args)]
@@ -987,6 +1014,7 @@ fn main() -> std::process::ExitCode {
         Command::Arm(a) => arm_cmd(a),
         Command::Withhold(a) => withhold_cmd(a),
         Command::WithheldK(a) => withheld_k_cmd(a),
+        Command::Adopt(a) => adopt_cmd(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

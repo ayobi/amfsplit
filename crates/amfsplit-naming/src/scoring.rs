@@ -56,7 +56,7 @@ pub struct OutcomeScore {
     pub diff_high: f64,
 }
 
-struct Unit { cluster: String, frozen: bool, arm: bool }
+pub(crate) struct Unit { pub(crate) cluster: String, pub(crate) frozen: bool, pub(crate) arm: bool }
 
 fn g1(r: &Row) -> bool { r.get("r3_flag").map(String::as_str) == Some("G1") }
 fn genera_of(r: &Row) -> Vec<&str> { col(r, "call_genera").split(';').filter(|g| !g.is_empty()).collect() }
@@ -129,7 +129,7 @@ fn paired_interval(units: &[Unit]) -> (f64, f64, usize) {
     (lo, hi, k)
 }
 
-fn summarize(design: &str, outcome: &str, units: Vec<Unit>) -> OutcomeScore {
+pub(crate) fn summarize(design: &str, outcome: &str, units: Vec<Unit>) -> OutcomeScore {
     let (diff_low, diff_high, clusters) = paired_interval(&units);
     OutcomeScore {
         design: design.into(), outcome: outcome.into(), n: units.len(), clusters,
@@ -320,12 +320,19 @@ pub fn score(data: &FrozenData, design: &str, results: &[TableResult], euk_predi
                             push("K, reference intact: known species kept", u(known(f) && calls(f, org), known(a) && calls(a, org)));
                             if has_r8(results) { push("K, reference intact: single-marker new lineages (R8)", u(false, !col(a, "r8_action").is_empty())); }
                         }
-                        ("W", "known species") => push("withheld K: false known", u(known(f), known(a))),
+                        ("W", "known species") => {
+                            push("withheld K: false known", u(known(f), known(a)));
+                            push("A, L and withheld K: false known", u(known(f), known(a)));
+                        }
                         ("A", "novel species, genus in v4") => {
                             push("A: false known", u(known(f), known(a)));
+                            push("A, L and withheld K: false known", u(known(f), known(a)));
                             if has_r7(results) && col(f, "status") == "novel lineage" { push("A: new lineages given the right genus (R7)", u(false, genera_of(a).contains(&og.as_str()))); }
                         }
-                        ("A", "novel lineage, genus not in v4") => push("L: false known", u(known(f), known(a))),
+                        ("A", "novel lineage, genus not in v4") => {
+                            push("L: false known", u(known(f), known(a)));
+                            push("A, L and withheld K: false known", u(known(f), known(a)));
+                        }
                         ("A", "genus only") => push("G: known calls", u(known(f), known(a))),
                         _ => {}
                     }

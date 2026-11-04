@@ -15,6 +15,7 @@ pub use external::{run_withheld_k, run_gate0b_euk, run_gate0b_lgdb, ExternalRepo
 mod evidence;
 pub mod newick;
 pub mod withhold;
+pub mod adopt;
 mod gate3;
 mod name;
 mod rules;
@@ -1991,6 +1992,27 @@ mod tests {
         assert_eq!(s["wrong genera added by R7: flagged"], (8, 0, 2));
         assert_eq!(s["A and L: wrong genera flagged (R3)"], (1070, 0, 200));
         assert_eq!(s["K and A: right genera falsely flagged (R3)"], (488, 0, 2));
+    }
+
+    #[test]
+    fn adopt_rehearsal_decisions() {
+        // Protocol v3's dress rehearsal (4 November 2026): section 8 applied to the development stand-ins
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let (Some(bench), Some(lgdb), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_LGDB"), var("AMFSPLIT_EUK")) else {
+            eprintln!("SKIPPED adopt rehearsal: set AMFSPLIT_BENCHMARK, AMFSPLIT_LGDB and AMFSPLIT_EUK");
+            return;
+        };
+        if !Path::new(&bench).join("benchmarks/protocol_v3/withheld_k").is_dir() { eprintln!("SKIPPED adopt rehearsal: benchmark checkout too old"); return; }
+        let out = std::env::temp_dir().join(format!("amfsplit-adopt-{}", std::process::id()));
+        let inp = adopt::AdoptInputs { benchmark: bench.into(), lgdb: lgdb.into(), euk: euk.into(), out: out.clone(), only: Vec::new() };
+        let got: BTreeMap<String, String> = adopt::run_adopt(&fixture(), &inp).unwrap().into_iter().map(|d| (d.rule, d.verdict)).collect();
+        let _ = std::fs::remove_dir_all(&out);
+        for (rule, verdict) in [("R1A", "fails"), ("R1B", "fails"), ("R2", "passes"), ("R4", "fails"), ("R5", "fails"), ("R5S", "passes"),
+                                ("R3A", "fails"), ("R3A_ALL", "fails"), ("R3B", "fails"), ("R7", "stays opt-in (no R3 adopted)"),
+                                ("R8", "flag on; R8d not adopted"), ("R6", "filtering stays (each run reports what triage dropped)"),
+                                ("V", "stays opt-in (no R3 adopted)"), ("S", "passes")] {
+            assert_eq!(got.get(rule).map(String::as_str), Some(verdict), "{rule}");
+        }
     }
 
     #[test]
