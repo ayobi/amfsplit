@@ -1838,6 +1838,10 @@ mod tests {
         let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
         let d = Path::new(&bench).join("benchmarks/protocol_v3");
         let triage = d.join("r6_negatives_triage.tsv.gz");
+        if !triage.is_file() {
+            eprintln!("SKIPPED R6 negatives: {} is absent (benchmark checkout older than 397a55b)", triage.display());
+            return;
+        }
         let labels = read_table_any(&triage).unwrap().rows;
         let count = |c: &str| labels.iter().filter(|r| r["call"] == c).count();
         assert_eq!((labels.len(), count("AMF"), count("unresolved"), count("non_AMF")), (19263, 0, 495, 18768));
