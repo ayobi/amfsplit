@@ -1788,6 +1788,30 @@ mod tests {
     }
 
     #[test]
+    fn r6_negatives() {
+        // non-Glomeromycota EUKARYOME v2.1 reads with ITS, LSU and SSU windows of at least 300 nt (4 November 2026):
+        // triage and the named rows of those that reach naming under R6 (protocol_v3/r6_negatives_*)
+        let Some(bench) = std::env::var("AMFSPLIT_BENCHMARK").ok().filter(|v| !v.is_empty()) else {
+            eprintln!("SKIPPED R6 negatives: set AMFSPLIT_BENCHMARK");
+            return;
+        };
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/naming");
+        let d = Path::new(&bench).join("benchmarks/protocol_v3");
+        let triage = d.join("r6_negatives_triage.tsv.gz");
+        let labels = read_table_any(&triage).unwrap().rows;
+        let count = |c: &str| labels.iter().filter(|r| r["call"] == c).count();
+        assert_eq!((labels.len(), count("AMF"), count("unresolved"), count("non_AMF")), (19263, 0, 495, 18768));
+        let out = std::env::temp_dir().join(format!("amfsplit-r6neg-{}.tsv", std::process::id()));
+        let r = rules::run_rules_triage(&fx, &["r6"], &[(d.join("r6_negatives_named_rows.tsv.gz"), out.clone())], &BTreeMap::new(), None, None, Some(&triage)).unwrap();
+        let _ = std::fs::remove_file(&out);
+        let rows: Vec<&Row> = r.results.iter().flat_map(|t| t.arm.iter()).collect();
+        let st = |s: &str| rows.iter().filter(|r| r["status"] == s).count();
+        // every non-AMF read that reaches naming is a new lineage labelled unconfirmed, or an artifact
+        assert_eq!((rows.len(), st("new lineage, AMF membership unconfirmed"), st("artifact")), (495, 485, 10));
+        assert!(rows.iter().all(|r| r["call_species"].is_empty() && r["call_genera"].is_empty()));
+    }
+
+    #[test]
     fn r1a_reproduces_its_eukaryome_development_estimates() {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         let (Some(bench), Some(euk)) = (var("AMFSPLIT_BENCHMARK"), var("AMFSPLIT_EUK")) else {

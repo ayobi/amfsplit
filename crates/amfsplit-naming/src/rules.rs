@@ -887,9 +887,11 @@ pub fn run_rules_triage(fixture_dir: &Path, rules: &[&str], tables: &[(std::path
     let mut results = Vec::new();
     for (table, out) in tables {
         let t = read_table_any(table)?;
-        if !t.headers.iter().any(|h| h == "held_cultures") { bail!("{} has no held_cultures column", table.display()); }
+        // `amfsplit name` rows have no held_cultures column: each query was named against all of v4
+        let has = |c: &str| t.headers.iter().any(|h| h == c);
+        if !has("held_cultures") && !(has("accession") && has("status") && has("call_genera")) { bail!("{} is not a named-row table (no held_cultures column)", table.display()); }
         let mut by_round: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for (i, r) in t.rows.iter().enumerate() { by_round.entry(row_value(r, "held_cultures")?.to_owned()).or_default().push(i); }
+        for (i, r) in t.rows.iter().enumerate() { by_round.entry(r.get("held_cultures").cloned().unwrap_or_default()).or_default().push(i); }
         let mut rows = t.rows.clone();
         let frozen_rows = t.rows.clone();
         // LSU units come from the round's own placements when the table sits in an M4 round folder
