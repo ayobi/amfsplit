@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use AMFsplit, please cite the archived release and the application note."
+title: "AMFsplit: reproducible naming of arbuscular mycorrhizal fungi from linked long-read rRNA sequences"
+type: software
+authors:
+  - family-names: "O'Brien"
+    given-names: "Aaron"
+license: "MIT"
+repository-code: "https://github.com/ayobi/amfsplit"
+version: "0.1.0"
+date-released: "2026-11-04"
+abstract: >-
+  Names long-read rRNA gene sequences of arbuscular mycorrhizal fungi by MaarjAM virtual taxon, UNITE
+  species hypothesis and LSU species clade with the culture-linked method of O'Brien, Marín and Tedersoo,
+  reproducing its published calls byte for byte, and reports how far each call can be trusted. Fixes
+  proposed since that study ship as opt-in rules, to be adopted only after Protocol v3, a pre-registered
+  test whose protocol, rule code and predictions were locked on 4 November 2026
+  (doi:10.5281/zenodo.23962473).
+keywords:
+  - arbuscular mycorrhizal fungi
+  - rRNA genes
+  - long reads
+  - metabarcoding
+  - taxonomic assignment
+  - novelty detection
+  - reproducibility
+preferred-citation:
+  type: article
+  title: "AMFsplit: reproducible naming of arbuscular mycorrhizal fungi from linked long-read rRNA sequences"
+  authors:
+    - family-names: "O'Brien"
+      given-names: "Aaron"
+  year: 2026
+  status: in-preparation
