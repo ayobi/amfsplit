@@ -33,7 +33,7 @@ from V18 before running vsearch.
 
 | Case | Options |
 |---|---|
-| `validate` | `--id 0.70 --threads 1` (needs vsearch 2.27.0 and V18) |
+| `validate` | `--id 0.70 --threads 1` (needs vsearch and V18) |
 | `triage_default` | `--records --fasta-prefix`, default outgroups, `--min-id 90` |
 | `triage_amf_pattern` | `--amf-pattern _[A-Z][a-z]+aceae_` |
 | `triage_ont_keep_unresolved` | `--min-id 85 --keep-unresolved` |
@@ -55,7 +55,10 @@ AMFSPLIT_TEST_V18_AMF=/path/to/V18_LSUDB_052025_AMFONLY.fasta \
 Without those variables, the two cases that need them print `SKIPPED` and pass. The test checks
 the V18 files by SHA-256 and reports the vsearch version if a hit differs. Everything passed here on
 17 October 2026, with vsearch v2.27.0 (linux x86_64 release) and V18 at commit `f4a0014`
-(V18_LSUDB_052025.fasta `28a806a6…`, V18_LSUDB_052025_AMFONLY.fasta `e6794cbb…`).
+(V18_LSUDB_052025.fasta `28a806a6…`, V18_LSUDB_052025_AMFONLY.fasta `e6794cbb…`). They passed again on
+5 November 2026, at v0.1.0, with vsearch v2.32.0 (Bioconda build `hd2be7a0_0`): the validate outputs are
+byte-identical to the 2.27.0 golden files. 2.32.0 is the version the Bioconda package installs, because
+2.27.0 cannot be installed next to BLAST+ 2.17.0 (it needs libzlib below 1.3).
 
 ## Where the port differs from the prototype: `--amf-reference`
 

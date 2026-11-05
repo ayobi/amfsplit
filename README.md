@@ -91,7 +91,8 @@ Needs a Rust toolchain (edition 2024) and a C++11 compiler (edlib is compiled fr
 cargo build --release
 target/release/amfsplit regions -i reads.fq.gz -a reads.anchors.tsv -p panels/amf_legacy_windows.tsv \
     -o out/sample --only-anchored --open-ends
-# AMF triage on the LR0R-FLR2 windows, against Delavaux V18 with its outgroups
+# AMF triage on the LR0R-FLR2 windows, against Delavaux V18 with its outgroups (runs vsearch: 2.27.0 or
+# 2.32.0, byte-identical on the parity case)
 target/release/amfsplit validate -w out/sample.LSU_LROR-FLR2.fasta -r V18_LSUDB_052025.fasta \
     -o out/sample.LSU_LROR-FLR2.vs_v18 --threads 8
 target/release/amfsplit triage --hits out/sample.LSU_LROR-FLR2.vs_v18.hits.tsv --out out/sample \

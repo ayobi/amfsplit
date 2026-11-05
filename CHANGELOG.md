@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Bioconda: vsearch 2.32.0 is a run dependency, for `validate`, and the recipe's test runs `validate`. The
+  paper's hits were made with vsearch 2.27.0, which cannot be installed next to BLAST+ 2.17.0; 2.32.0 gives
+  byte-identical outputs on the validate parity case (checked 5 November 2026).
+
 ## 0.1.0 (November 2026)
 
 The paper's method, as in 0.1.0-rc.1, plus the fixes proposed since, as opt-in rules for Protocol v3 to
