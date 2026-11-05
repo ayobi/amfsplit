@@ -20,8 +20,9 @@ v0.1 reproduces the paper's method assignment for assignment: from the stored ev
 placements of release 0.3.1 (Gates 0a and 0b), and from its own BLAST+ evidence and EPA-ng
 placements (Gate 3). On the 280 LongGloDB test sequences, `amfsplit name` reproduces the published
 calls end to end. The fixes proposed since the paper ship as opt-in rules (`arm`) until Protocol v3,
-locked on 4 November 2026 (doi:10.5281/zenodo.23962473), decides which become defaults. Until the
-Bioconda package is out, build from source (below).
+locked on 4 November 2026 (doi:10.5281/zenodo.23962473), decides which become defaults. Release
+0.1.0 is archived at doi:10.5281/zenodo.23966769. Until the Bioconda package is out, build from source
+(below).
 
 ## Quick start: naming long reads
 

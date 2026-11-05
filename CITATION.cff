@@ -7,6 +7,7 @@ authors:
     given-names: "Aaron"
 license: "MIT"
 repository-code: "https://github.com/ayobi/amfsplit"
+doi: "10.5281/zenodo.23966769"
 version: "0.1.0"
 date-released: "2026-11-04"
 abstract: >-
