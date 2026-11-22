@@ -5,6 +5,21 @@
   </picture>
 </p>
 
+---
+<br>
+
+<p align="left">
+  <a href="https://bioconda.github.io/recipes/amfsplit/README.html"><img src="https://img.shields.io/conda/dn/bioconda/amfsplit.svg?label=Bioconda" alt="Bioconda"></a>
+  <a href="https://anaconda.org/bioconda/amfsplit"><img src="https://img.shields.io/conda/vn/bioconda/amfsplit.svg" alt="Conda Version"></a>
+  <a href="https://quay.io/repository/biocontainers/amfsplit"><img src="https://img.shields.io/badge/Docker-quay.io%2Fbiocontainers%2Famfsplit-blue?logo=docker" alt="Docker (BioContainers)"></a>
+  <a href="https://github.com/ayobi/amfsplit/releases"><img src="https://img.shields.io/github/v/release/ayobi/amfsplit" alt="GitHub Release"></a>
+  <a href="https://github.com/ayobi/amfsplit/actions/workflows/ci.yml"><img src="https://github.com/ayobi/amfsplit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-1.88%2B-b7410e?logo=rust&amp;logoColor=white" alt="Rust 1.88+"></a>
+  <a href="https://doi.org/10.5281/zenodo.23966769"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23966769-1682D4?logo=zenodo" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.23962473"><img src="https://img.shields.io/badge/Protocol%20v3-10.5281%2Fzenodo.23962473-1682D4?logo=zenodo" alt="Protocol v3 (locked)"></a>
+</p>
+
 Long-read SSU–ITS–LSU metabarcoding of arbuscular mycorrhizal fungi: from accurate long reads to
 names in the three systems surveys use (MaarjAM VT, UNITE SH, LSU species clade), a culture-linked
 assignment, and how far that assignment can be trusted.
@@ -21,8 +36,8 @@ placements of release 0.3.1 (Gates 0a and 0b), and from its own BLAST+ evidence 
 placements (Gate 3). On the 280 LongGloDB test sequences, `amfsplit name` reproduces the published
 calls end to end. The fixes proposed since the paper ship as opt-in rules (`arm`) until Protocol v3,
 locked on 4 November 2026 (doi:10.5281/zenodo.23962473), decides which become defaults. Release
-0.1.0 is archived at doi:10.5281/zenodo.23966769. Until the Bioconda package is out, build from source
-(below).
+0.1.0 is archived at doi:10.5281/zenodo.23966769. Install it from Bioconda
+(`conda install -c conda-forge -c bioconda amfsplit`) or build from source (below).
 
 ## Quick start: naming long reads
 
